@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APK = ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+APK = ROOT / "release" / "DEG-Messages-v1.0.0-universal.apk"
 OUTPUT = ROOT / "docs" / "screenshots"
 PACKAGE = "com.example.messages"
 
