@@ -1,0 +1,4 @@
+DEG Messages release signing certificate
+SHA-256: AF:2B:85:DD:CF:30:FB:1A:56:98:94:AF:2C:9F:FD:62:82:4A:69:BE:61:86:2E:06:98:B5:7E:B6:A0:07:9B:A6
+Key alias: deg-messages-release
+Certificate valid until: 2054-03-26

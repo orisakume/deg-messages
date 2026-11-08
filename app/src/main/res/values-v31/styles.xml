@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Messages" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#00E956</item>
+        <item name="android:windowBackground">@drawable/app_splash_background</item>
+        <item name="android:windowSplashScreenBackground">@color/app_icon_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/app_icon_art</item>
+    </style>
+</resources>
