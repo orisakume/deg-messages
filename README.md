@@ -134,8 +134,8 @@ before opening a change. Security reports should follow [SECURITY.md](SECURITY.m
 
 ## Releases
 
-The [v1.0.0 GitHub release](https://github.com/orisakume/deg-messages/releases/tag/v1.0.0)
-includes these signed APK downloads and `SHA256SUMS.txt`:
+The published [v1.0.0 GitHub release](https://github.com/orisakume/deg-messages/releases/tag/v1.0.0)
+includes signed APK downloads and `SHA256SUMS.txt`:
 
 - [Universal APK](https://github.com/orisakume/deg-messages/releases/download/v1.0.0/DEG-Messages-v1.0.0-universal.apk)
 - [ARM64 APK](https://github.com/orisakume/deg-messages/releases/download/v1.0.0/DEG-Messages-v1.0.0-arm64-v8a.apk)
@@ -143,6 +143,10 @@ includes these signed APK downloads and `SHA256SUMS.txt`:
 - [x86_64 APK](https://github.com/orisakume/deg-messages/releases/download/v1.0.0/DEG-Messages-v1.0.0-x86_64.apk)
 - [x86 APK](https://github.com/orisakume/deg-messages/releases/download/v1.0.0/DEG-Messages-v1.0.0-x86.apk)
 - [SHA-256 checksums](https://github.com/orisakume/deg-messages/releases/download/v1.0.0/SHA256SUMS.txt)
+
+The signed [AAB build artifact](https://github.com/orisakume/deg-messages/releases/download/v1.0.0/DEG-Messages-v1.0.0.aab)
+is for integrators and is not directly installable; most users should download
+the universal APK above.
 
 ## License
 
