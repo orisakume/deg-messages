@@ -1,93 +1,308 @@
 package com.example.messages.feature.settings
 
+import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import com.example.messages.core.design.AppColors
+import com.example.messages.data.mms.ImageResolution
 import com.example.messages.data.recyclebin.RecycleBinRepository
 
+internal enum class SettingsDestination(
+    val title: String,
+    val summary: String,
+    val icon: ImageVector,
+    val accent: Color,
+    val route: String,
+    val hasSettingsPage: Boolean = true,
+) {
+    Media("Photos in MMS", "Image resolution and carrier limits", Icons.Default.Image, Color(0xFF91BEFF), "settings/media"),
+    Scheduled("Scheduled SMS", "Manage messages queued to send", Icons.Default.Schedule, Color(0xFF8ADCD0), "scheduled", false),
+    Notifications("Notifications", "Message previews, sounds and lock screen", Icons.Default.Notifications, Color(0xFFFFC780), "settings/notifications"),
+    AppLock("App lock", "PIN, password and fingerprint", Icons.Default.Lock, Color(0xFFCDB2FF), "settings/app-lock"),
+    Spam("Spam protection", "Automatic filtering and blocked senders", Icons.Default.Shield, Color(0xFFFFA4AF), "settings/spam"),
+    Otp("OTP expiry", "When verification cards disappear", Icons.Default.VerifiedUser, Color(0xFF9CDF9E), "settings/otp"),
+    Backup("Backup and restore", "Export or import message history", Icons.Default.Backup, Color(0xFF83DAFC), "settings/backup"),
+    Recycle("Recycle Bin", "Recover deleted SMS and set retention", Icons.Default.DeleteOutline, Color(0xFFFFB39E), "settings/recycle"),
+    Appearance("Appearance", "Bottom navigation bar style", Icons.Default.Palette, Color(0xFFB7BCF7), "settings/appearance"),
+    About("About DEG Messages", "Version and release notes", Icons.Default.Info, Color(0xFFC0C6DD), "about", false),
+}
+
+private val settingsCard = Color(0xFF17191E)
+private val iconTile = RoundedCornerShape(13.dp)
+
 @Composable
-fun SettingsScreen(onRecycleBin: () -> Unit, onSpam: () -> Unit, onAbout: () -> Unit) {
+internal fun SettingsScreen(onOpen: (SettingsDestination) -> Unit, bottomBarSpace: Dp = 0.dp) {
+    SettingsPage("Settings", bottomBarSpace = bottomBarSpace) {
+        SettingsGroup("Messaging") {
+            DestinationLinks(onOpen, SettingsDestination.Media, SettingsDestination.Scheduled, SettingsDestination.Notifications)
+        }
+        SettingsGroup("Privacy and safety") {
+            DestinationLinks(onOpen, SettingsDestination.AppLock, SettingsDestination.Spam, SettingsDestination.Otp)
+        }
+        SettingsGroup("Data and storage") {
+            DestinationLinks(onOpen, SettingsDestination.Backup, SettingsDestination.Recycle)
+        }
+        SettingsGroup("App") { DestinationLinks(onOpen, SettingsDestination.Appearance, SettingsDestination.About) }
+    }
+}
+
+@Composable
+internal fun SettingsDetailScreen(
+    destination: SettingsDestination,
+    onBack: () -> Unit,
+    onOpenRecycleBin: () -> Unit,
+    onOpenSpam: () -> Unit,
+    transparentNavigationBar: Boolean,
+    onTransparentNavigationBarChange: (Boolean) -> Unit,
+) {
+    SettingsPage(destination.title, onBack) {
+        when (destination) {
+            SettingsDestination.Media -> MediaSettings()
+            SettingsDestination.Notifications -> NotificationSettings()
+            SettingsDestination.AppLock -> SettingsGroup("Verification") { PinLockSetting() }
+            SettingsDestination.Spam -> SpamSettings(onOpenSpam)
+            SettingsDestination.Otp -> SettingsGroup("Verification cards") {
+                SettingsNote("OTP cards disappear after 24 hours or four copies. The original SMS stays in the conversation.")
+            }
+            SettingsDestination.Backup -> BackupSettings()
+            SettingsDestination.Recycle -> RecycleSettings(onOpenRecycleBin)
+            SettingsDestination.Appearance -> SettingsGroup("Navigation") {
+                SettingsToggle("Transparent bottom bar", "Let content show through the Chats, OTPs and Settings bar",
+                    SettingsDestination.Appearance, transparentNavigationBar, onTransparentNavigationBarChange)
+            }
+            SettingsDestination.Scheduled, SettingsDestination.About -> Unit
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsPage(title: String, onBack: (() -> Unit)? = null, bottomBarSpace: Dp = 0.dp, content: @Composable ColumnScope.() -> Unit) {
+    val scroll = rememberScrollState()
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.fillMaxHeight().widthIn(max = 680.dp).fillMaxWidth()) {
+            if (onBack != null) {
+                TopAppBar(
+                    title = { Text(title) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
+                )
+            }
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)
+                    .padding(start = 18.dp, end = 18.dp, top = if (onBack == null) 18.dp else 8.dp, bottom = 24.dp + bottomBarSpace),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                if (onBack == null) Text(title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 3.dp, bottom = 4.dp))
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Text(title, color = AppColors.TextSecondary, style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 8.dp))
+        Surface(shape = RoundedCornerShape(24.dp), color = settingsCard, contentColor = AppColors.TextPrimary) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 3.dp), content = content)
+        }
+    }
+}
+
+@Composable
+private fun DestinationLinks(onOpen: (SettingsDestination) -> Unit, vararg destinations: SettingsDestination) {
+    destinations.forEachIndexed { index, destination ->
+        if (index > 0) SettingsDivider()
+        SettingsLink(destination.title, destination.summary, destination.icon, destination.accent) { onOpen(destination) }
+    }
+}
+
+@Composable
+internal fun SettingsDivider() {
+    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = AppColors.Divider)
+}
+
+@Composable
+internal fun SettingsLink(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accent: Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    SettingsRow(
+        title, subtitle, icon, accent,
+        modifier = Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+    ) {
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = AppColors.TextSecondary, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun SettingsRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    trailing: @Composable () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().then(modifier).heightIn(min = 72.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(42.dp).background(accent, iconTile), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = Color(0xFF141820), modifier = Modifier.size(22.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+        }
+        trailing()
+    }
+}
+
+@Composable
+private fun SettingsToggle(
+    title: String,
+    subtitle: String,
+    destination: SettingsDestination,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    SettingsRow(
+        title, subtitle, destination.icon, destination.accent,
+        modifier = Modifier.toggleable(checked, role = Role.Switch, onValueChange = onChange),
+    ) {
+        Switch(checked, onCheckedChange = null, colors = SwitchDefaults.colors(
+            checkedThumbColor = AppColors.Background,
+            checkedTrackColor = AppColors.AccentGreen,
+        ))
+    }
+}
+
+@Composable
+private fun <T> SettingsChoices(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
+    Column(Modifier.selectableGroup()) {
+        options.forEachIndexed { index, option ->
+            if (index > 0) SettingsDivider()
+            Row(
+                Modifier.fillMaxWidth().selectable(selected == option, role = Role.RadioButton, onClick = { onSelect(option) })
+                    .heightIn(min = 54.dp).padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label(option), style = MaterialTheme.typography.bodyLarge)
+                RadioButton(selected == option, onClick = null, colors = RadioButtonDefaults.colors(selectedColor = AppColors.AccentGreen))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsNote(text: String) {
+    Text(text, modifier = Modifier.padding(16.dp), color = AppColors.TextSecondary, style = MaterialTheme.typography.bodyMedium)
+}
+
+@Composable
+private fun MediaSettings() {
     val context = LocalContext.current
-    val recyclePrefs = remember { context.getSharedPreferences(RecycleBinRepository.PREFS, android.content.Context.MODE_PRIVATE) }
-    val privacyPrefs = remember { context.getSharedPreferences("notification_privacy", android.content.Context.MODE_PRIVATE) }
-    var recycleEnabled by remember { mutableStateOf(recyclePrefs.getBoolean(RecycleBinRepository.KEY_ENABLED, true)) }
-    var retention by remember { mutableIntStateOf(recyclePrefs.getInt(RecycleBinRepository.KEY_DAYS, 30)) }
-    var showMessageContent by remember { mutableStateOf(!privacyPrefs.getBoolean("hide_preview", false)) }
-
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
-        item { Text("RECYCLE BIN", color = AppColors.AccentGreen, style = MaterialTheme.typography.labelLarge) }
-        item {
-            SettingToggle("Keep deleted messages", "Save a private recovery copy before removing messages from Android storage.", recycleEnabled) { enabled ->
-                recycleEnabled = enabled; recyclePrefs.edit().putBoolean(RecycleBinRepository.KEY_ENABLED, enabled).apply()
-            }
+    val prefs = remember(context) { context.getSharedPreferences("mms_settings", Context.MODE_PRIVATE) }
+    var resolution by remember(prefs) { mutableStateOf(ImageResolution.preferred(context)) }
+    SettingsGroup("Image resolution") {
+        SettingsChoices(ImageResolution.entries, resolution, ImageResolution::label) { option ->
+            resolution = option
+            prefs.edit().putString("resolution", option.name).apply()
         }
-        if (recycleEnabled) item {
-            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                Text("Permanently delete after", style = MaterialTheme.typography.titleSmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(7, 15, 30).forEach { days ->
-                        FilterChip(selected = retention == days, onClick = { retention = days; recyclePrefs.edit().putInt(RecycleBinRepository.KEY_DAYS, days).apply() }, label = { Text("$days days") }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = AppColors.AccentGreen, selectedLabelColor = AppColors.Background))
-                    }
-                }
-            }
-        }
-        item { SettingLink("Open Recycle Bin", "Restore or permanently delete saved messages", Icons.Default.DeleteOutline, onRecycleBin) }
-        item { Text("OTP EXPIRY", color = AppColors.AccentGreen, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 16.dp)) }
-        item {
-            Text(
-                "OTP cards disappear after 24 hours or after four copies. The original SMS remains in its conversation.",
-                color = AppColors.TextSecondary,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(vertical = 8.dp),
-            )
-        }
-        item { Text("PRIVACY", color = AppColors.AccentGreen, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 16.dp)) }
-        item {
-            SettingToggle("Show Message Content in Notifications", "When off, notifications show the sender and a generic new-message label.", showMessageContent) { enabled ->
-                showMessageContent = enabled; privacyPrefs.edit().putBoolean("hide_preview", !enabled).apply()
-            }
-        }
-        item { SettingLink("Notifications", "Android controls channel sounds and lock-screen behavior", Icons.Default.Notifications) {
-            val intent = if (Build.VERSION.SDK_INT >= 26) Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${context.packageName}"))
-            context.startActivity(intent)
-        } }
-        item { SettingLink("Spam & blocked numbers", "Local filtering only; no carrier blocking guarantee", Icons.Default.Security, onSpam) }
-        item { Text("GENERAL", color = AppColors.AccentGreen, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 16.dp)) }
-        item { SettingLink("About", "Version, release notes, included features and limitations", Icons.Default.Info, onAbout) }
+        SettingsDivider()
+        SettingsNote("Auto fits each SIM’s carrier limits. Original keeps the image file when it fits.")
     }
 }
 
 @Composable
-private fun SettingToggle(title: String, summary: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) { Text(title, style = MaterialTheme.typography.titleSmall); Text(summary, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall) }
-        Switch(checked = checked, onCheckedChange = onCheckedChange, colors = SwitchDefaults.colors(checkedThumbColor = AppColors.Background, checkedTrackColor = AppColors.AccentGreen))
+private fun NotificationSettings() {
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences("notification_privacy", Context.MODE_PRIVATE) }
+    var showContent by remember(prefs) { mutableStateOf(!prefs.getBoolean("hide_preview", false)) }
+    SettingsGroup("Message alerts") {
+        SettingsToggle("Show message previews", "Include message text in notifications", SettingsDestination.Notifications, showContent) {
+            showContent = it
+            prefs.edit().putBoolean("hide_preview", !it).apply()
+        }
+        SettingsDivider()
+        SettingsLink("Android notification settings", "Manage sound and lock-screen behavior",
+            Icons.Default.Tune, SettingsDestination.Notifications.accent) {
+            context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+        }
     }
 }
 
 @Composable
-private fun SettingLink(title: String, summary: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-        Icon(icon, contentDescription = null, tint = AppColors.TextSecondary)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) { Text(title, color = AppColors.TextPrimary); Text(summary, color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall) }
-        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = AppColors.TextSecondary)
+private fun SpamSettings(onOpenSpam: () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences("spam_protection", Context.MODE_PRIVATE) }
+    var automatic by remember(prefs) { mutableStateOf(prefs.getBoolean("automatic", true)) }
+    SettingsGroup("Filtering") {
+        SettingsToggle("Automatic spam protection", "Silence suspected phishing from unknown senders", SettingsDestination.Spam, automatic) {
+            automatic = it
+            prefs.edit().putBoolean("automatic", it).apply()
+        }
+        SettingsDivider()
+        SettingsLink("Spam and blocked numbers", "Review flagged messages and manage blocked senders",
+            Icons.Default.Block, SettingsDestination.Spam.accent, onClick = onOpenSpam)
+    }
+}
+
+@Composable
+private fun RecycleSettings(onOpenRecycleBin: () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences(RecycleBinRepository.PREFS, Context.MODE_PRIVATE) }
+    var enabled by remember(prefs) { mutableStateOf(prefs.getBoolean(RecycleBinRepository.KEY_ENABLED, true)) }
+    var retention by remember(prefs) { mutableIntStateOf(prefs.getInt(RecycleBinRepository.KEY_DAYS, 30)) }
+    SettingsGroup("Deleted SMS") {
+        SettingsLink("Open Recycle Bin", "Restore or permanently delete saved messages", Icons.Default.DeleteOutline,
+            SettingsDestination.Recycle.accent, onClick = onOpenRecycleBin)
+        SettingsDivider()
+        SettingsToggle("Keep deleted messages", "Save a recovery copy when deleting SMS", SettingsDestination.Recycle, enabled) {
+            enabled = it
+            prefs.edit().putBoolean(RecycleBinRepository.KEY_ENABLED, it).apply()
+        }
+    }
+    if (enabled) SettingsGroup("Permanently delete after") {
+        SettingsChoices(listOf(7, 15, 30), retention, { "$it days" }) { days ->
+            retention = days
+            prefs.edit().putInt(RecycleBinRepository.KEY_DAYS, days).apply()
+        }
     }
 }

@@ -12,6 +12,9 @@ data class SmsRecord(
     val type: Int,
     val status: Int,
     val subscriptionId: Int,
+    val attachmentUri: String? = null,
+    val attachmentMime: String? = null,
+    val sendError: String? = null,
 )
 
 data class SmsConversation(
@@ -29,6 +32,7 @@ data class SmsConversation(
     val textScale: Float,
     val searchContent: String,
     val contactPhotoUri: String = "",
+    val category: MessageCategory = MessageCategory.Personal,
 )
 
 data class ContactDetails(val displayName: String = "", val photoUri: String = "")
@@ -37,7 +41,7 @@ data class ContactDetails(val displayName: String = "", val photoUri: String = "
 fun canReplyToSmsAddress(address: String): Boolean =
     address.isNotBlank() && PhoneNumberUtils.isWellFormedSmsAddress(address.trim())
 
-data class ContactCandidate(val name: String, val number: String)
+data class ContactCandidate(val name: String, val number: String, val photoUri: String = "")
 data class SimOption(val subscriptionId: Int, val displayName: String, val slotIndex: Int)
 data class ConversationFlags(val pinned: Boolean, val archived: Boolean, val muted: Boolean, val spam: Boolean, val textScale: Float)
 
@@ -58,7 +62,7 @@ object ConversationMapper {
                 threadId = threadId,
                 address = address,
                 displayName = contact.displayName.ifBlank { address.ifBlank { "Unknown sender" } },
-                preview = latest.body,
+                preview = latest.body.ifBlank { if (latest.attachmentMime?.startsWith("video/") == true) "Video" else if (latest.attachmentUri != null) "Photo" else "" },
                 date = latest.date,
                 unreadCount = records.count { it.type == INBOX_TYPE && !it.read },
                 messageCount = records.size,
@@ -69,6 +73,7 @@ object ConversationMapper {
                 textScale = flags.textScale,
                 searchContent = records.joinToString(" ") { "${it.address} ${it.body}" },
                 contactPhotoUri = contact.photoUri,
+                category = classifyMessage(records.asSequence().filter { it.type == INBOX_TYPE }.maxByOrNull(SmsRecord::date)?.body.orEmpty()),
             )
         }
         .sortedWith(compareByDescending<SmsConversation> { it.pinned }.thenByDescending { it.date })

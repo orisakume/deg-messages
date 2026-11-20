@@ -20,9 +20,10 @@ class SmsSentReceiver : BroadcastReceiver() {
         val messageId = intent.data?.pathSegments?.getOrNull(1)?.toLongOrNull() ?: return
         val success = resultCode == Activity.RESULT_OK
         val result = resultCode
+        val scheduleToken = intent.getStringExtra("schedule_token")
         val pending = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            try { repository.recordSentPart(messageId, success, result) } finally { pending.finish() }
+            try { repository.recordSentPart(messageId, success, result, scheduleToken) } finally { pending.finish() }
         }
     }
 }

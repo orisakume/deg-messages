@@ -39,12 +39,12 @@ fun AboutScreen(onBack: () -> Unit) {
         ) {
             item {
                 Text("DEG Messages", style = MaterialTheme.typography.headlineMedium)
-                Text("Version $versionName · Version 1 · SMS edition", color = AppColors.AccentGreen, style = MaterialTheme.typography.titleMedium)
+                Text("Version $versionName", color = AppColors.AccentGreen, style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("Simple · Private · Fast. A native Android SMS app with a fixed black, white and green interface.", color = AppColors.TextSecondary)
+                Text("A native Android messaging app with a black, white and green interface.", color = AppColors.TextSecondary)
             }
             item {
-                AboutSection("INCLUDED IN VERSION 1")
+                AboutSection("MESSAGING FEATURES")
                 AboutBullets(
                     "Send and receive SMS through Android's default SMS app role.",
                     "Inbox filters, search, saved contact names and photos, archive, pin, mute, read status, and multi-select.",
@@ -54,27 +54,30 @@ fun AboutScreen(onBack: () -> Unit) {
                     "New-message notifications with configurable message previews and context-aware actions.",
                     "Recycle Bin with restore and configurable retention when enabled.",
                     "Local spam folder and blocked-number rules. Blocking is app-local, not carrier-level.",
-                    "Optional contacts and SIM selection. No account, ads, analytics, or cloud service.",
+                    "Contact photos, contact search, choice of number, and dual-SIM selection.",
+                    "Send photo MMS and short MP4 or 3GP clips. Image resolution is configurable.",
+                    "Schedule SMS, edit or cancel pending messages, and retry failures.",
+                    "Local quick replies, message categories, and PIN app lock.",
                 )
             }
             item {
-                AboutSection("NOT INCLUDED IN VERSION 1")
+                AboutSection("CARRIER AND ATTACHMENT SUPPORT")
                 AboutBullets(
-                    "MMS, photo sending or receiving, and all attachment messaging. These are deferred to Version 2.",
+                    "MMS sending depends on the selected carrier’s service and size limit. Incoming MMS downloads are unavailable in this release.",
                     "Cloud sync, online backup, or account-based restore.",
                     "Carrier-level spam blocking. Delivery reports are shown only when supported and returned by the carrier.",
                 )
             }
             item {
-                AboutSection("VERSION 1.0.0 RELEASE NOTES")
+                AboutSection("VERSION 2 RELEASE NOTES")
                 AboutBullets(
-                    "SMS-focused release with Android default-handler integration.",
+                    "Built for Android 10 through Android 17.",
                     "OTP and cleanup controls are grouped under Settings.",
                     "Message selection actions use named controls for easier recognition.",
                     "Inbox swipes have one consistent meaning: swipe right to mark read; swipe left to archive.",
                     "Manual Chats, OTPs, and Settings navigation; the OTP tab shows a count badge when codes are detected.",
                     "Read and archive swipes now settle consistently, with a clear empty state when no unread chats remain.",
-                    "Photo and attachment controls are omitted while MMS is deferred.",
+                    "Conversation history loads in pages of 50 messages.",
                 )
             }
             item {
@@ -84,9 +87,6 @@ fun AboutScreen(onBack: () -> Unit) {
                     color = AppColors.TextSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-            }
-            item {
-                Text("Version 1 is SMS-only. Use another messaging app for photo or MMS messages until Version 2.", color = AppColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

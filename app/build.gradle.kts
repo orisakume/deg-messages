@@ -9,12 +9,13 @@ plugins {
 }
 
 val releaseSigningPropertiesFile = rootProject.file("keystore.properties")
+val unsignedRelease = providers.gradleProperty("unsignedRelease").map(String::toBoolean).getOrElse(false)
+val hasReleaseSigning = !unsignedRelease && releaseSigningPropertiesFile.isFile
 val releaseSigningProperties = Properties().apply {
-    if (releaseSigningPropertiesFile.isFile) {
+    if (hasReleaseSigning) {
         releaseSigningPropertiesFile.inputStream().use(::load)
     }
 }
-val hasReleaseSigning = releaseSigningPropertiesFile.isFile
 
 android {
     namespace = "com.example.messages"
@@ -24,8 +25,8 @@ android {
         applicationId = "com.example.messages"
         minSdk = 29
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.0.0"
+        versionCode = 5
+        versionName = "2.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -38,6 +39,12 @@ android {
             include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
             isUniversalApk = true
         }
+    }
+
+    buildTypes.named("release") {
+        isMinifyEnabled = true
+        isShrinkResources = true
+        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
     }
 
     if (hasReleaseSigning) {

@@ -37,7 +37,10 @@ import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -61,11 +64,17 @@ class SmsRepository @Inject constructor(
     private val otpRecordDao: OtpRecordDao,
 ) {
     private val resolver = context.contentResolver
+    private val contactsCache = android.util.LruCache<String, ContactDetails>(512)
+    private val mmsStore = com.example.messages.data.mms.MmsStore(context)
+
+    suspend fun sendAttachment(address: String, text: String, image: Uri, sim: Int): Long =
+        mmsStore.send(address, text, image, sim, com.example.messages.data.mms.ImageResolution.preferred(context))
 
     fun observeConversations(): Flow<List<SmsConversation>> =
-        providerChanges(Telephony.Sms.CONTENT_URI)
-            .mapLatest { withContext(Dispatchers.IO) { readAllMessages() } }
+        messageChanges()
+            .mapLatest { readAllMessages() }
             .combine(conversationMetadataDao.observeAll()) { records, metadata -> records to metadata }
+            .combine(contactChanges()) { (records, metadata), _ -> records to metadata }
             .flatMapLatest { (records, metadata) ->
                 flow {
                     val flags = metadata.associate {
@@ -73,12 +82,13 @@ class SmsRepository @Inject constructor(
                     }
                     // Emit inbox rows before doing the per-conversation Contacts lookups.
                     val conversations = withContext(Dispatchers.Default) {
-                        ConversationMapper.map(records, flags)
+                        ConversationMapper.map(records, flags) { address -> contactsCache.get(address) ?: ContactDetails() }
                     }
                     emit(conversations)
                     val withContacts = withContext(Dispatchers.IO) {
                         conversations.map { conversation ->
-                            val contact = lookupContactDetailsOnIo(conversation.address)
+                            ensureActive()
+                            val contact = cachedContactDetails(conversation.address)
                             conversation.copy(
                                 displayName = contact.displayName.ifBlank { conversation.address.ifBlank { "Unknown sender" } },
                                 contactPhotoUri = contact.photoUri,
@@ -90,9 +100,22 @@ class SmsRepository @Inject constructor(
             }
             .distinctUntilChanged()
 
-    fun observeThread(threadId: Long): Flow<List<SmsRecord>> =
-        providerChanges(Telephony.Sms.CONTENT_URI)
-            .mapLatest { withContext(Dispatchers.IO) { readThread(threadId) } }
+    fun observeSearch(query: MessageSearch): Flow<Set<Long>?> = if (!query.hasMessageFilters) flow { emit(null) } else
+        messageChanges().mapLatest {
+            withContext(Dispatchers.IO) {
+                val names = mutableMapOf<String, String>()
+                readAllMessages().asSequence().filter { message ->
+                    val name = if (query.field != SearchField.Message && query.text.isNotBlank()) {
+                        names.getOrPut(message.address) { cachedContactDetails(message.address).displayName }
+                    } else ""
+                    query.matches(message, name)
+                }.map(SmsRecord::threadId).toSet()
+            }
+        }
+
+    fun observeThread(threadId: Long, limit: Int = Int.MAX_VALUE): Flow<List<SmsRecord>> =
+        messageChanges()
+            .mapLatest { withContext(Dispatchers.IO) { readThread(threadId, limit) } }
             .distinctUntilChanged()
 
     fun observeMessageMetadata(): Flow<List<MessageMetadataEntity>> = messageMetadataDao.observeAll()
@@ -101,7 +124,10 @@ class SmsRepository @Inject constructor(
     suspend fun loadThread(threadId: Long): List<SmsRecord> = withContext(Dispatchers.IO) { readThread(threadId) }
 
     suspend fun indexHistoricalOtpMessages() = withContext(Dispatchers.IO) {
-        readRecords(Telephony.Sms.Inbox.CONTENT_URI, null, null, "${Telephony.Sms.DATE} DESC").forEach { message ->
+        val earliest = (System.currentTimeMillis() - OtpRecordEntity.EXPIRATION_MS).toString()
+        val spamIds = conversationMetadataDao.observeAll().first().filter { it.spam }.map { it.threadId }.toSet()
+        readRecords(Telephony.Sms.Inbox.CONTENT_URI, "${Telephony.Sms.DATE}>?", arrayOf(earliest), "${Telephony.Sms.DATE} DESC").forEach { message ->
+            if (message.threadId in spamIds) return@forEach
             val code = OtpDetector.detect(message.body) ?: return@forEach
             if (otpRecordDao.get(message.id) == null) {
                 otpRecordDao.upsert(
@@ -128,15 +154,21 @@ class SmsRepository @Inject constructor(
         val result = mutableListOf<ContactCandidate>()
         resolver.query(
             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
+            arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER,
+                ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI),
             "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? OR ${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?",
             arrayOf("%$query%", "%$query%"),
             "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC",
         )?.use { cursor ->
             val nameColumn = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
             val numberColumn = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-            while (cursor.moveToNext() && result.size < 8) {
-                result += ContactCandidate(cursor.getString(nameColumn).orEmpty(), cursor.getString(numberColumn).orEmpty())
+            val photoColumn = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI)
+            val seen = mutableSetOf<String>()
+            while (result.size < 30 && cursor.moveToNext()) {
+                val number = cursor.getString(numberColumn).orEmpty()
+                if (number.isNotBlank() && seen.add(PhoneNumberUtils.normalizeNumber(number))) {
+                    result += ContactCandidate(cursor.getString(nameColumn).orEmpty(), number, cursor.getString(photoColumn).orEmpty())
+                }
             }
         }
         result.distinctBy(ContactCandidate::number)
@@ -152,7 +184,7 @@ class SmsRepository @Inject constructor(
         }
         try {
             val manager = context.getSystemService(SubscriptionManager::class.java)
-            manager?.activeSubscriptionInfoList.orEmpty().map {
+            manager?.activeSubscriptionInfoList.orEmpty().sortedBy { it.simSlotIndex }.map {
                 val carrier = it.carrierName?.toString().orEmpty().trim()
                 val label = carrier.ifBlank { it.displayName?.toString().orEmpty().trim() }
                 SimOption(it.subscriptionId, label.ifBlank { "SIM ${it.simSlotIndex + 1}" }, it.simSlotIndex)
@@ -224,12 +256,15 @@ class SmsRepository @Inject constructor(
     suspend fun deleteThreads(threadIds: List<Long>) = withContext(Dispatchers.IO) {
         if (threadIds.isEmpty()) return@withContext
         recycleBin.deleteThreads(threadIds)
+        threadIds.forEach { thread -> mmsStore.read(thread).forEach { mmsStore.delete(it.id) } }
         conversationMetadataDao.delete(threadIds)
     }
 
     suspend fun deleteMessages(messageIds: List<Long>) = withContext(Dispatchers.IO) {
         if (messageIds.isEmpty()) return@withContext
-        recycleBin.deleteMessages(messageIds)
+        messageIds.filter { it < 0 }.forEach(mmsStore::delete)
+        val smsIds = messageIds.filter { it >= 0 }
+        if (smsIds.isNotEmpty()) recycleBin.deleteMessages(smsIds)
         messageMetadataDao.delete(messageIds)
     }
 
@@ -254,7 +289,7 @@ class SmsRepository @Inject constructor(
         readById(messageId)?.threadId
     }
 
-    suspend fun sendSms(address: String, body: String, subscriptionId: Int = SubscriptionManager.INVALID_SUBSCRIPTION_ID): Long = withContext(Dispatchers.IO) {
+    suspend fun sendSms(address: String, body: String, subscriptionId: Int = SubscriptionManager.INVALID_SUBSCRIPTION_ID, scheduleToken: String? = null): Long = withContext(Dispatchers.IO) {
         val destination = address.trim()
         require(destination.isNotEmpty() && PhoneNumberUtils.isWellFormedSmsAddress(destination)) { "Enter a valid phone number." }
         require(body.isNotBlank()) { "Write a message before sending." }
@@ -270,6 +305,9 @@ class SmsRepository @Inject constructor(
 
         val threadId = Telephony.Threads.getOrCreateThreadId(context, setOf(destination))
         val baseManager = context.getSystemService(SmsManager::class.java)
+        if (subscriptionId < 0 && activeSubscriptions().size > 1 && SubscriptionManager.getDefaultSmsSubscriptionId() < 0) {
+            error("Choose the SIM to use for this message.")
+        }
         val manager = if (subscriptionId >= 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             baseManager.createForSubscriptionId(subscriptionId)
         } else if (subscriptionId >= 0) {
@@ -299,6 +337,7 @@ class SmsRepository @Inject constructor(
             val sentIntent = android.content.Intent(context, SmsSentReceiver::class.java)
                 .setAction("com.example.messages.SMS_SENT")
                 .setData(Uri.parse("messages://sms/sent/$messageId/$index"))
+                .putExtra("schedule_token", scheduleToken)
             val deliveryIntent = android.content.Intent(context, SmsDeliveryStatusReceiver::class.java)
                 .setAction("com.example.messages.SMS_DELIVERED")
                 .setData(Uri.parse("messages://sms/delivered/$messageId/$index"))
@@ -321,7 +360,7 @@ class SmsRepository @Inject constructor(
         messageId
     }
 
-    suspend fun recordSentPart(messageId: Long, success: Boolean, resultCode: Int) = withContext(Dispatchers.IO) {
+    suspend fun recordSentPart(messageId: Long, success: Boolean, resultCode: Int, scheduleToken: String?) = withContext(Dispatchers.IO) {
         val progress = sendTrackingDao.recordPart(messageId, success) ?: return@withContext
         val uri = ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, messageId)
         if (!success) {
@@ -337,7 +376,10 @@ class SmsRepository @Inject constructor(
                 put(Telephony.Sms.DATE_SENT, System.currentTimeMillis())
             }, null, null)
         }
-        if (progress.completedParts >= progress.totalParts) sendTrackingDao.delete(messageId)
+        if (progress.completedParts >= progress.totalParts) {
+            scheduleToken?.let { com.example.messages.data.schedule.ScheduledSmsStore(context).finish(it, !progress.hasFailure) }
+            sendTrackingDao.delete(messageId)
+        }
     }
 
     suspend fun updateDeliveryStatus(messageId: Long, delivered: Boolean) = withContext(Dispatchers.IO) {
@@ -356,22 +398,36 @@ class SmsRepository @Inject constructor(
         sendSms(record.address, record.body, record.subscriptionId)
     }
 
-    private fun providerChanges(uri: Uri) = callbackFlow {
+    private fun messageChanges() = providerChanges(Telephony.Sms.CONTENT_URI, Telephony.Mms.CONTENT_URI).conflate()
+
+    private fun contactChanges(): Flow<Unit> = if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        providerChanges(ContactsContract.Contacts.CONTENT_URI).mapLatest { contactsCache.evictAll() }
+    } else flow { emit(Unit) }
+
+    private fun providerChanges(vararg uris: Uri) = callbackFlow {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) { trySend(Unit) }
             override fun onChange(selfChange: Boolean, changedUri: Uri?) { trySend(Unit) }
         }
-        resolver.registerContentObserver(uri, true, observer)
-        trySend(Unit)
-        awaitClose { resolver.unregisterContentObserver(observer) }
+        try {
+            uris.forEach { resolver.registerContentObserver(it, true, observer) }
+            trySend(Unit)
+            awaitClose()
+        } finally {
+            resolver.unregisterContentObserver(observer)
+        }
     }
 
     private suspend fun readAllMessages(): List<SmsRecord> = withContext(Dispatchers.IO) {
-        readRecords(Telephony.Sms.CONTENT_URI, null, null, "${Telephony.Sms.DATE} DESC")
+        readRecords(Telephony.Sms.CONTENT_URI, null, null, "${Telephony.Sms.DATE} DESC") + mmsStore.read()
     }
 
-    private suspend fun readThread(threadId: Long): List<SmsRecord> = withContext(Dispatchers.IO) {
-        readRecords(Telephony.Sms.CONTENT_URI, "${Telephony.Sms.THREAD_ID}=?", arrayOf(threadId.toString()), "${Telephony.Sms.DATE} ASC")
+    private suspend fun readThread(threadId: Long, limit: Int = Int.MAX_VALUE): List<SmsRecord> = withContext(Dispatchers.IO) {
+        val sms = readRecords(Telephony.Sms.CONTENT_URI, "${Telephony.Sms.THREAD_ID}=?", arrayOf(threadId.toString()),
+            "${Telephony.Sms.DATE} DESC, ${BaseColumns._ID} DESC", limit)
+        (sms + mmsStore.read(threadId, limit)).sortedWith(compareByDescending<SmsRecord> { it.date }
+            .thenByDescending { it.id }).take(limit).asReversed()
     }
 
     private fun readById(messageId: Long): SmsRecord? = readRecords(
@@ -381,7 +437,7 @@ class SmsRepository @Inject constructor(
         null,
     ).firstOrNull()
 
-    private fun readRecords(uri: Uri, selection: String?, args: Array<String>?, order: String?): List<SmsRecord> {
+    private fun readRecords(uri: Uri, selection: String?, args: Array<String>?, order: String?, limit: Int = Int.MAX_VALUE): List<SmsRecord> {
         val result = mutableListOf<SmsRecord>()
         resolver.query(uri, SMS_PROJECTION, selection, args, order)?.use { cursor ->
             val id = cursor.getColumnIndexOrThrow(BaseColumns._ID)
@@ -393,7 +449,7 @@ class SmsRepository @Inject constructor(
             val type = cursor.getColumnIndexOrThrow(Telephony.Sms.TYPE)
             val status = cursor.getColumnIndexOrThrow(Telephony.Sms.STATUS)
             val subId = cursor.getColumnIndexOrThrow(Telephony.Sms.SUBSCRIPTION_ID)
-            while (cursor.moveToNext()) {
+            while (result.size < limit && cursor.moveToNext()) {
                 result += SmsRecord(
                     cursor.getLong(id), cursor.getLong(thread), cursor.getString(address).orEmpty(),
                     cursor.getString(body).orEmpty(), cursor.getLong(date), cursor.getInt(read) != 0,
@@ -403,6 +459,9 @@ class SmsRepository @Inject constructor(
         }
         return result
     }
+
+    private fun cachedContactDetails(address: String): ContactDetails = contactsCache.get(address)
+        ?: lookupContactDetailsOnIo(address).also { contactsCache.put(address, it) }
 
     private fun lookupContactDetailsOnIo(address: String): ContactDetails {
         if (address.isBlank() || ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return ContactDetails()

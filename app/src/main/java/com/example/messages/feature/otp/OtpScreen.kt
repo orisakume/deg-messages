@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.*
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -21,7 +22,7 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun OtpScreen(viewModel: OtpViewModel = hiltViewModel()) {
+fun OtpScreen(bottomBarSpace: Dp = 0.dp, viewModel: OtpViewModel = hiltViewModel()) {
     val records = viewModel.records.collectAsStateWithLifecycle().value
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<com.example.messages.core.database.OtpRecordEntity?>(null) }
@@ -33,7 +34,7 @@ fun OtpScreen(viewModel: OtpViewModel = hiltViewModel()) {
         OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Search codes or senders") }, singleLine = true)
         Spacer(Modifier.height(12.dp))
         if (filtered.isEmpty()) Text(if (query.isBlank()) "No verification codes detected yet." else "No matching codes.", color = AppColors.TextSecondary)
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = bottomBarSpace)) {
             items(filtered, key = { it.messageId }) { otp ->
                 Card(colors = CardDefaults.cardColors(containerColor = AppColors.Surface), shape = RoundedCornerShape(16.dp)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {

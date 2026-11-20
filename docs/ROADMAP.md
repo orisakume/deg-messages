@@ -56,10 +56,20 @@
 - [ ] Review current Google Play SMS policy and Android default-handler requirements before submission.
 - [ ] Provide a clear support contact and release notes; do not advertise MMS/photo messaging in Version 1.
 
-## Version 2 — deferred media messaging
+## Version 2.0.0 — development scope
 
-- MMS/photo send and receive, carrier/APN handling, attachment download and persistence, and related UX/security tests are future-version work. No Version 2 code is included in the Version 1 release scope.
-- Sender identity icons: prefer a saved contact photo, then show a locally bundled category icon for confidently recognized senders (for example, a gas-cylinder icon for Indane); use initials/generic icons when identity is uncertain. Use company logos only when their source and sender matching are verified. Keep recognition on-device and avoid adding network access or permissions just to fetch logos.
+V2 development is tracked on `codex-v2-development`. The goal is a privacy-focused SMS/MMS client using Android telephony and local processing only. No analytics, account, advertising, proprietary cloud, paid API, or developer-operated server is in scope. V1 behavior must remain available throughout development.
+
+### Planned work
+
+- [ ] Messaging: strengthen SMS delivery/retry, drafts, multi-recipient composition, message actions and conversation organization; add carrier-compatible MMS, attachment handling and image preparation where Android/carrier APIs permit.
+- [ ] Smart messaging: configurable local OTP retention, user-correctable local categories, richer local search, scheduled SMS with restart recovery, and local templates.
+- [ ] Privacy: optional app lock and private conversations using Android authentication; local blocklist and suspicious-link warnings; never claim SMS encryption.
+- [ ] Notifications and contacts: notification actions and per-conversation controls; contact discovery/photos and explicit-confirmation QR import/export.
+- [ ] Data management: validated user-selected backup/restore, optional encrypted export, duplicate handling, and improved Recycle Bin retention and restore behavior.
+- [ ] Experience and quality: accessible adaptive UI, theme options, performance work, Android 10+ compatibility, device/manual test matrix, and release documentation.
+
+These are planned requirements, not claims that the features are already implemented. Carrier/MMS behavior and system-restricted operations will be marked with their tested limitations.
 
 ## Current known gaps and unverified behavior
 

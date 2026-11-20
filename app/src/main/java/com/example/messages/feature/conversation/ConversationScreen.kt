@@ -1,14 +1,38 @@
 package com.example.messages.feature.conversation
 
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.os.PersistableBundle
+import android.provider.Telephony
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import com.example.messages.feature.inbox.ContactAvatar
 import android.net.Uri
 import android.telephony.SubscriptionManager
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.automirrored.filled.Forward
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Report
+import androidx.compose.material.icons.filled.PlayArrow
+import com.example.messages.core.design.ActionSheet
+import com.example.messages.core.design.ActionDropdown
+import com.example.messages.data.sms.HighlightKind
+import com.example.messages.data.sms.MessageHighlight
+import com.example.messages.core.design.ActionTone
+import com.example.messages.core.design.SheetAction
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -25,19 +49,15 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.messages.feature.schedule.ScheduleSmsDialog
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -56,8 +76,9 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConversationScreen(onBack: () -> Unit, viewModel: ConversationViewModel = hiltViewModel()) {
-    val messages by viewModel.messages.collectAsStateWithLifecycle()
+fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit, viewModel: ConversationViewModel = hiltViewModel()) {
+    val history by viewModel.history.collectAsStateWithLifecycle()
+    val messages = history.messages
     val pinnedIds by viewModel.pinnedMessageIds.collectAsStateWithLifecycle()
     val conversationMetadata by viewModel.conversationMetadata.collectAsStateWithLifecycle()
     val contactDetails by viewModel.contactDetails.collectAsStateWithLifecycle()
@@ -66,28 +87,139 @@ fun ConversationScreen(onBack: () -> Unit, viewModel: ConversationViewModel = hi
     var scaleSaveJob by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(savedTextScale) { textScale = savedTextScale }
     val selected = remember { mutableStateListOf<Long>() }
-    var text by remember { mutableStateOf("") }
-    var selectedSim by remember { mutableStateOf<SimOption?>(null) }
+    var text by rememberSaveable { mutableStateOf("") }
+    var image by rememberSaveable { mutableStateOf<String?>(null) }
+    var scheduleDraft by remember { mutableStateOf<String?>(null) }
+    var scheduleComposer by remember { mutableStateOf(false) }
+    var actionMessage by remember { mutableStateOf<SmsRecord?>(null) }
+    var selectionMenu by remember { mutableStateOf(false) }
+    var saveSource by rememberSaveable { mutableStateOf<String?>(null) }
+    var sending by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf<SmsRecord?>(null) }
+    val selectedMessages = if (selected.isEmpty()) emptyList() else messages.filter { it.id in selected }
+    var selectedSim by rememberSaveable(stateSaver = SimOptionSaver) { mutableStateOf<SimOption?>(null) }
     var menu by remember { mutableStateOf(false) }
-    var deleteMessages by remember { mutableStateOf(false) }
+    var deleteTargets by remember { mutableStateOf<List<SmsRecord>?>(null) }
     var deleteConversation by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var phoneNumberAction by remember { mutableStateOf<String?>(null) }
+    var highlightAction by remember { mutableStateOf<MessageHighlight?>(null) }
     val context = LocalContext.current
-    val handlePhoneNumberClick: (String) -> Unit = remember { { number -> phoneNumberAction = number } }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
-
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    fun shareHighlight(highlight: MessageHighlight) {
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, highlight.value)
+        context.startActivity(Intent.createChooser(send, null))
     }
+    fun copyHighlight(highlight: MessageHighlight) {
+        val clip = ClipData.newPlainText(highlight.kind.label, highlight.value)
+        if (highlight.kind == HighlightKind.Otp) {
+            clip.description.extras = PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
+        }
+        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(clip)
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            if (snackbar.showSnackbar("${highlight.kind.label} copied", actionLabel = "Share") == SnackbarResult.ActionPerformed) {
+                shareHighlight(highlight)
+            }
+        }
+    }
+    BackHandler(enabled = selected.isNotEmpty() && !selectionMenu) { selected.clear() }
+    val saveAttachment = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { destination ->
+        val source = saveSource
+        saveSource = null
+        if (destination != null && source != null) scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val resolver = context.contentResolver
+                    checkNotNull(resolver.openInputStream(Uri.parse(source))).use { input ->
+                        checkNotNull(resolver.openOutputStream(destination)).use { output -> input.copyTo(output) }
+                    }
+                }
+                snackbar.showSnackbar("Attachment saved")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { snackbar.showSnackbar("Could not save the attachment") }
+        }
+    }
+
+    LaunchedEffect(messages.lastOrNull()?.id) {
+        if (messages.isNotEmpty() && !listState.canScrollBackward) listState.scrollToItem(messages.lastIndex)
+        else if (messages.isNotEmpty() && listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == messages.lastIndex - 1) listState.animateScrollToItem(messages.lastIndex)
+    }
+
+    val targets = actionMessage?.let(::listOf) ?: selectedMessages
+    val messageActions = if (targets.isNotEmpty()) {
+        val single = targets.singleOrNull()
+        val body = targets.map { it.body }.filter(String::isNotBlank).joinToString("\n")
+        val media = single?.attachmentUri
+        val canTransfer = media != null || (body.isNotBlank() && targets.none { it.attachmentUri != null })
+        buildList {
+            if (body.isNotBlank()) add(SheetAction("Copy", Icons.Default.ContentCopy, tone = ActionTone.Blue) {
+                clipboard.setText(AnnotatedString(body))
+            })
+            if (canTransfer) {
+                add(SheetAction("Forward", Icons.AutoMirrored.Filled.Forward, tone = ActionTone.Teal) { onForward(body, media); selected.clear() })
+                add(SheetAction("Share", Icons.Default.Share, tone = ActionTone.Lilac) {
+                    scope.launch {
+                        try {
+                            val share = if (media == null) Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, body)
+                            else mediaIntent(context, Uri.parse(media), single?.attachmentMime ?: "application/octet-stream", body)
+                            context.startActivity(Intent.createChooser(share, null))
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (_: Exception) { snackbar.showSnackbar("Could not share this message") }
+                    }
+                })
+            }
+            add(SheetAction("Delete", Icons.Default.DeleteOutline, destructive = true) { deleteTargets = targets })
+            actionMessage?.let { message ->
+                add(SheetAction("Select", Icons.Default.SelectAll, tone = ActionTone.Blue) { selected.add(message.id) })
+            }
+            if (selectionMenu) add(SheetAction(if (selected.size == messages.size) "Deselect all" else "Select all", Icons.Default.SelectAll, tone = ActionTone.Blue) {
+                val allSelected = selected.size == messages.size
+                selected.clear()
+                if (!allSelected) selected.addAll(messages.map(SmsRecord::id))
+            })
+            if (single != null) {
+                add(SheetAction("Details", Icons.Default.Info, tone = ActionTone.Blue) { details = single })
+                if (media == null && body.isNotBlank() && canReplyToSmsAddress(viewModel.address)) {
+                    add(SheetAction("Schedule", Icons.Default.Schedule, tone = ActionTone.Amber) {
+                        scheduleComposer = false
+                        scheduleDraft = body
+                    })
+                }
+                if (media != null || body.isNotBlank()) add(SheetAction("Save", Icons.Default.BookmarkBorder, tone = ActionTone.Sage) {
+                    if (media != null) {
+                        val extension = when (single.attachmentMime) {
+                            "image/jpeg" -> "jpg"
+                            "video/3gpp" -> "3gp"
+                            else -> single.attachmentMime.orEmpty().substringAfter('/').filter(Char::isLetterOrDigit).ifBlank { "dat" }
+                        }
+                        saveSource = media
+                        saveAttachment.launch("DEG-${single.date}.$extension")
+                    } else {
+                        val result = saveMessageAsQuickReply(context, body)
+                        scope.launch { snackbar.showSnackbar(result) }
+                    }
+                })
+            }
+            val pin = targets.any { it.id !in pinnedIds }
+            add(SheetAction(if (pin) "Pin" else "Unpin", Icons.Default.PushPin, tone = ActionTone.Amber) {
+                targets.forEach { viewModel.setMessagePinned(it.id, pin) }
+            })
+        }
+    } else emptyList()
 
     Scaffold(
         containerColor = AppColors.Background,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        contactDetails?.takeIf { it.photoUri.isNotBlank() }?.let { contact ->
+                            Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) { ContactAvatar(contact.photoUri, contact.displayName) }
+                        }
                     Column {
                         val title = contactDetails?.displayName?.ifBlank { viewModel.address } ?: viewModel.address
                         Text(title.ifBlank { "Conversation" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -96,79 +228,61 @@ fun ConversationScreen(onBack: () -> Unit, viewModel: ConversationViewModel = hi
                         }
                         if (selected.isNotEmpty()) Text("${selected.size} selected", style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
                     }
+                    }
                 },
                 navigationIcon = { IconButton(onClick = if (selected.isNotEmpty()) ({ selected.clear() }) else onBack) { Icon(if (selected.isNotEmpty()) Icons.Default.Close else Icons.Default.ArrowBack, contentDescription = if (selected.isNotEmpty()) "Cancel selection" else "Back") } },
                 actions = {
                     if (selected.isEmpty()) {
-                        SimSelector(selectedSim, viewModel::subscriptions) { selectedSim = it }
+                        if (canReplyToSmsAddress(viewModel.address)) {
+                            SimSelector(selectedSim, viewModel::subscriptions) { selectedSim = it }
+                        }
                         Box {
-                            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Conversation options") }
-                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(
-                                    text = { Text(if (conversationMetadata.pinned) "Unpin conversation" else "Pin conversation") },
-                                    onClick = { scope.launch { viewModel.setPinned(!conversationMetadata.pinned); menu = false } },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (conversationMetadata.archived) "Unarchive conversation" else "Archive conversation") },
-                                    onClick = {
-                                        scope.launch {
-                                            viewModel.setArchived(!conversationMetadata.archived)
-                                            menu = false
-                                            if (!conversationMetadata.archived) onBack()
-                                        }
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (conversationMetadata.spam) "Not spam" else "Move to spam") },
-                                    onClick = {
-                                        scope.launch {
-                                            viewModel.setSpam(!conversationMetadata.spam)
-                                            menu = false
-                                            if (!conversationMetadata.spam) onBack()
-                                        }
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Block sender") },
-                                    onClick = { scope.launch { viewModel.blockSender(); menu = false; onBack() } },
-                                )
-                                DropdownMenuItem(text = { Text("Delete conversation", color = AppColors.Danger) }, onClick = { menu = false; deleteConversation = true })
-                            }
+                            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Conversation options") }
+                            if (menu) ActionSheet("Conversation actions", buildList {
+                                if (canReplyToSmsAddress(viewModel.address) && text.isNotBlank() && image == null && !sending) {
+                                    add(SheetAction("Schedule", Icons.Default.Schedule, tone = ActionTone.Amber) {
+                                        scheduleComposer = true
+                                        scheduleDraft = text
+                                    })
+                                }
+                                add(SheetAction(if (conversationMetadata.pinned) "Unpin" else "Pin", Icons.Default.PushPin, tone = ActionTone.Amber) {
+                                    scope.launch { viewModel.setPinned(!conversationMetadata.pinned) }
+                                })
+                                add(SheetAction(if (conversationMetadata.archived) "Unarchive" else "Archive", Icons.Default.Archive, tone = ActionTone.Teal) {
+                                    scope.launch {
+                                        viewModel.setArchived(!conversationMetadata.archived)
+                                        if (!conversationMetadata.archived) onBack()
+                                    }
+                                })
+                                add(SheetAction(if (conversationMetadata.spam) "Not spam" else "Spam", Icons.Default.Report, tone = ActionTone.Rose) {
+                                    scope.launch {
+                                        viewModel.setSpam(!conversationMetadata.spam)
+                                        if (!conversationMetadata.spam) onBack()
+                                    }
+                                })
+                                add(SheetAction("Block", Icons.Default.Block, tone = ActionTone.Rose) { scope.launch { viewModel.blockSender(); onBack() } })
+                                add(SheetAction("Delete", Icons.Default.DeleteOutline, destructive = true) { deleteConversation = true })
+                            }) { menu = false }
                         }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
             )
         },
-        bottomBar = if (canReplyToSmsAddress(viewModel.address)) ({
+        bottomBar = if (canReplyToSmsAddress(viewModel.address) || selected.isNotEmpty()) ({
             Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
                 error?.let { Text(it, color = AppColors.Danger, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)) }
                 if (selected.isNotEmpty()) {
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = {
-                            if (selected.size == messages.size) selected.clear() else { selected.clear(); selected.addAll(messages.map(SmsRecord::id)) }
-                        }) {
-                            Icon(Icons.Default.SelectAll, contentDescription = null); Spacer(Modifier.width(4.dp)); Text(if (selected.size == messages.size) "Deselect all" else "Select all", maxLines = 1, softWrap = false)
-                        }
-                        TextButton(onClick = {
-                            val selectedText = messages.filter { it.id in selected }.joinToString("\n") { it.body }
-                            clipboard.setText(AnnotatedString(selectedText)); selected.clear()
-                        }) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null); Spacer(Modifier.width(4.dp)); Text("Copy")
-                        }
-                        TextButton(onClick = {
-                            val pin = selected.any { it !in pinnedIds }
-                            selected.forEach { viewModel.setMessagePinned(it, pin) }
-                        }) {
-                            Icon(Icons.Default.PushPin, contentDescription = null); Spacer(Modifier.width(4.dp)); Text(if (selected.any { it !in pinnedIds }) "Pin" else "Unpin")
-                        }
-                        TextButton(onClick = { deleteMessages = true }) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = AppColors.Danger); Spacer(Modifier.width(4.dp)); Text("Delete", color = AppColors.Danger)
-                        }
+                    Box(Modifier.align(Alignment.CenterHorizontally)) {
+                        Button(onClick = { selectionMenu = true }) { Text("Message actions") }
+                        if (selectionMenu) ActionDropdown(messageActions) { selectionMenu = false }
                     }
-                    HorizontalDivider(color = AppColors.Divider)
                 }
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (canReplyToSmsAddress(viewModel.address) && selected.isEmpty()) image?.let {
+                    AttachedMedia(android.net.Uri.parse(it)) { image = null }
+                }
+                if (canReplyToSmsAddress(viewModel.address) && selected.isEmpty()) Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AddAttachmentButton(!sending) { image = it.toString() }
                     OutlinedTextField(
                         value = text,
                         onValueChange = { text = it; error = null },
@@ -176,23 +290,30 @@ fun ConversationScreen(onBack: () -> Unit, viewModel: ConversationViewModel = hi
                         placeholder = { Text("Text message") },
                         minLines = 1,
                         maxLines = 4,
+                        enabled = !sending,
+                        trailingIcon = { QuickReplies(text) { text = appendQuickReply(text, it) } },
                     )
                     FilledIconButton(
                         onClick = {
                             val message = text
+                            sending = true
                             scope.launch {
                                 try {
-                                    viewModel.send(message, selectedSim?.subscriptionId ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID)
+                                    viewModel.send(message, selectedSim?.subscriptionId ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID,
+                                        image?.let(android.net.Uri::parse))
                                     text = ""
+                                    image = null
                                     error = null
+                                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                    throw cancelled
                                 } catch (failure: Exception) {
                                     error = failure.message ?: "Message could not be sent. Check your SIM and try again."
-                                }
+                                } finally { sending = false }
                             }
                         },
-                        enabled = text.isNotBlank(),
+                        enabled = !sending && (text.isNotBlank() || image != null),
                         colors = IconButtonDefaults.filledIconButtonColors(containerColor = AppColors.AccentGreen, contentColor = AppColors.Background),
-                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send SMS") }
+                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = if (image == null) "Send SMS" else "Send MMS") }
                 }
             }
         }) else ({}),
@@ -225,6 +346,9 @@ fun ConversationScreen(onBack: () -> Unit, viewModel: ConversationViewModel = hi
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                if (history.hasOlder) item(key = "older") {
+                    TextButton(onClick = viewModel::loadOlderMessages) { Text("Load older messages") }
+                }
                 itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
                     if (index == 0 || !sameDay(messages[index - 1].date, message.date)) DateSeparator(message.date)
                     MessageBubble(
@@ -237,52 +361,122 @@ fun ConversationScreen(onBack: () -> Unit, viewModel: ConversationViewModel = hi
                                 if (message.id in selected) selected.remove(message.id) else selected.add(message.id)
                             }
                         },
-                        onLongClick = { if (message.id in selected) selected.remove(message.id) else selected.add(message.id) },
+                        onLongClick = {
+                            if (selected.isEmpty()) actionMessage = message
+                            else if (message.id in selected) selected.remove(message.id) else selected.add(message.id)
+                        },
+                        onPlay = { uri, mime ->
+                            scope.launch {
+                                try { context.startActivity(mediaIntent(context, uri, mime, "", view = true)) }
+                                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                catch (_: Exception) { snackbar.showSnackbar("Could not open this video") }
+                            }
+                        },
                         onRetry = {
                             scope.launch {
-                                try { viewModel.retry(message.id); error = null }
+                                try { viewModel.retry(message); error = null }
                                 catch (failure: Exception) { error = failure.message ?: "Retry failed. Check your SIM and try again." }
                             }
                         },
-                        onPhoneNumberClick = handlePhoneNumberClick,
+                        selectionActive = selected.isNotEmpty(),
+                        onHighlightClick = { highlightAction = it },
+                        onHighlightCopy = ::copyHighlight,
                     )
                 }
             }
         }
     }
 
-    if (deleteMessages) AlertDialog(
-        onDismissRequest = { deleteMessages = false },
+
+    if (actionMessage != null && messageActions.isNotEmpty()) {
+        ActionSheet("Message actions", messageActions) { actionMessage = null }
+    }
+
+    scheduleDraft?.let { draft -> ScheduleSmsDialog(viewModel.address, draft,
+        selectedSim?.subscriptionId ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID,
+        { scheduleDraft = null }, {
+            scheduleDraft = null
+            if (scheduleComposer) text = ""
+            scope.launch { snackbar.showSnackbar("SMS scheduled") }
+        }, subscriptions = viewModel::subscriptions) }
+
+    details?.let { message ->
+        val simLabel by produceState<String?>(null, message.subscriptionId) {
+            value = viewModel.subscriptions().firstOrNull { it.subscriptionId == message.subscriptionId }
+                ?.let { "SIM ${it.slotIndex + 1} · ${it.displayName}" }
+        }
+        AlertDialog(onDismissRequest = { details = null }, title = { Text("Message details") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (message.type == Telephony.Sms.MESSAGE_TYPE_INBOX) "From ${message.address}" else "To ${message.address}")
+                Text(if (message.attachmentUri == null) "SMS" else "MMS")
+                Text(java.text.DateFormat.getDateTimeInstance().format(java.util.Date(message.date)))
+                Text(simLabel ?: if (message.subscriptionId >= 0) "SIM subscription ${message.subscriptionId}" else "SIM unavailable")
+                message.sendError?.let { Text(it, color = AppColors.Danger) }
+                Text(when (message.type) {
+                    Telephony.Sms.MESSAGE_TYPE_INBOX -> "Received"
+                    Telephony.Sms.MESSAGE_TYPE_FAILED -> "Failed"
+                    Telephony.Sms.MESSAGE_TYPE_SENT -> if (message.status == Telephony.Sms.STATUS_COMPLETE) "Delivered" else "Sent"
+                    else -> "Pending"
+                })
+            }
+        }, confirmButton = { TextButton(onClick = { details = null }) { Text("Close") } })
+    }
+
+    deleteTargets?.let { targets -> AlertDialog(
+        onDismissRequest = { deleteTargets = null },
         title = { Text("Delete messages?") },
-        text = { Text(if (viewModel.recycleBinEnabled) "These messages will be moved to the Recycle Bin for recovery." else "These messages will be permanently deleted because the Recycle Bin is off.") },
-        confirmButton = { TextButton(onClick = { viewModel.deleteMessages(selected.toList()); selected.clear(); deleteMessages = false }) { Text("Delete", color = AppColors.Danger) } },
-        dismissButton = { TextButton(onClick = { deleteMessages = false }) { Text("Cancel") } },
+        text = { Text(when {
+            !viewModel.recycleBinEnabled -> "These messages will be permanently deleted."
+            targets.all { it.attachmentUri != null } -> "These MMS messages will be permanently deleted."
+            targets.any { it.attachmentUri != null } -> "SMS goes to the Recycle Bin. MMS attachments will be permanently deleted."
+            else -> "These messages will be moved to the Recycle Bin for recovery."
+        }) },
+        confirmButton = { TextButton(onClick = { viewModel.deleteMessages(targets.map(SmsRecord::id)); selected.clear(); deleteTargets = null }) { Text("Delete", color = AppColors.Danger) } },
+        dismissButton = { TextButton(onClick = { deleteTargets = null }) { Text("Cancel") } },
         containerColor = AppColors.SurfaceElevated,
     )
+    }
     if (deleteConversation) AlertDialog(
         onDismissRequest = { deleteConversation = false },
         title = { Text("Delete conversation?") },
-        text = { Text(if (viewModel.recycleBinEnabled) "This conversation will be moved to the Recycle Bin for recovery." else "This conversation will be permanently deleted because the Recycle Bin is off.") },
+        text = { Text(if (viewModel.recycleBinEnabled) "SMS goes to the Recycle Bin. Any MMS messages will be permanently deleted." else "This conversation will be permanently deleted because the Recycle Bin is off.") },
         confirmButton = { TextButton(onClick = { scope.launch { viewModel.deleteConversation(); deleteConversation = false; onBack() } }) { Text("Delete", color = AppColors.Danger) } },
         dismissButton = { TextButton(onClick = { deleteConversation = false }) { Text("Cancel") } },
         containerColor = AppColors.SurfaceElevated,
     )
-    phoneNumberAction?.let { number ->
+    highlightAction?.let { highlight ->
+        val link = when {
+            highlight.value.startsWith("www.", ignoreCase = true) -> Uri.parse("https://" + highlight.value)
+            else -> Uri.parse(highlight.value)
+        }.takeIf { it.scheme?.lowercase(Locale.ROOT) in setOf("http", "https") && !it.host.isNullOrBlank() }
+        val target = when (highlight.kind) {
+            HighlightKind.Phone -> Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", highlight.value.filter { it.isDigit() || it == '+' }, null))
+            HighlightKind.Link -> link?.let { Intent(Intent.ACTION_VIEW, it) }
+            HighlightKind.Email -> Intent(Intent.ACTION_SENDTO, Uri.fromParts("mailto", highlight.value, null))
+            HighlightKind.Otp -> null
+        }
         AlertDialog(
-            onDismissRequest = { phoneNumberAction = null },
-            title = { Text("Phone number") },
-            text = { Text(number, style = MaterialTheme.typography.titleMedium) },
+            onDismissRequest = { highlightAction = null },
+            title = { Text(highlight.kind.label) },
+            text = { Text(highlight.value, style = MaterialTheme.typography.titleMedium) },
             confirmButton = {
-                TextButton(onClick = {
-                    val dialable = number.filter { it.isDigit() || it == '+' }
-                    context.startActivity(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", dialable, null)))
-                    phoneNumberAction = null
-                }) { Text("Dial") }
+                TextButton(onClick = { highlightAction = null; copyHighlight(highlight) }) { Text("Copy") }
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { clipboard.setText(AnnotatedString(number)); phoneNumberAction = null }) { Text("Copy") }
-                    TextButton(onClick = { phoneNumberAction = null }) { Text("Close") }
+                    if (target != null) TextButton(onClick = {
+                        highlightAction = null
+                        try { context.startActivity(target) } catch (_: android.content.ActivityNotFoundException) {
+                            scope.launch { snackbar.showSnackbar("No app can open this ${highlight.kind.label.lowercase(Locale.ROOT)}") }
+                        }
+                    }) {
+                        Text(when (highlight.kind) {
+                            HighlightKind.Phone -> "Dial"
+                            HighlightKind.Email -> "Email"
+                            else -> "Open link"
+                        })
+                    }
+                    TextButton(onClick = { highlightAction = null; shareHighlight(highlight) }) { Text("Share") }
                 }
             },
             containerColor = AppColors.SurfaceElevated,
@@ -309,13 +503,20 @@ private fun MessageBubble(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onRetry: () -> Unit,
-    onPhoneNumberClick: (String) -> Unit,
+    onPlay: (Uri, String) -> Unit,
+    selectionActive: Boolean,
+    onHighlightClick: (MessageHighlight) -> Unit,
+    onHighlightCopy: (MessageHighlight) -> Unit,
 ) {
     val outgoing = message.type != android.provider.Telephony.Sms.MESSAGE_TYPE_INBOX
+    val bubbleColor by animateColorAsState(
+        if (selected) AppColors.GreenTint else if (outgoing) AppColors.AccentGreenDark else AppColors.SurfaceElevated,
+        animationSpec = tween(130), label = "Message selection",
+    )
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
         Column(horizontalAlignment = if (outgoing) Alignment.End else Alignment.Start) {
             Surface(
-                color = if (selected) AppColors.GreenTint else if (outgoing) AppColors.AccentGreenDark else AppColors.SurfaceElevated,
+                color = bubbleColor,
                 shape = RoundedCornerShape(20.dp),
                 border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, AppColors.AccentGreen) else null,
                 modifier = Modifier.widthIn(max = 320.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick),
@@ -326,34 +527,32 @@ private fun MessageBubble(
                         Spacer(Modifier.width(4.dp))
                         Text("Pinned", style = MaterialTheme.typography.labelSmall, color = AppColors.AccentGreen)
                     }
-                    val linkedBody = remember(message.body, onPhoneNumberClick) {
-                        buildAnnotatedString {
-                            var cursor = 0
-                            PHONE_NUMBER_CANDIDATE.findAll(message.body).forEach { match ->
-                                val digits = match.value.filter(Char::isDigit)
-                                if (digits.length in 7..15) {
-                                    append(message.body.substring(cursor, match.range.first))
-                                    val candidate = match.value.trim().trimEnd('-', '.', ' ')
-                                    withLink(
-                                        LinkAnnotation.Clickable(
-                                            tag = digits,
-                                            styles = TextLinkStyles(SpanStyle(color = AppColors.AccentGreen, textDecoration = TextDecoration.Underline)),
-                                            linkInteractionListener = { onPhoneNumberClick(candidate) },
-                                        ),
-                                    ) { append(candidate) }
-                                    cursor = match.range.last + 1
-                                }
-                            }
-                            append(message.body.substring(cursor))
+                    message.attachmentUri?.let {
+                        val uri = Uri.parse(it)
+                        val mime = message.attachmentMime.orEmpty()
+                        val video = mime.startsWith("video/")
+                        MessageImage(uri, Modifier.widthIn(max = 250.dp).heightIn(max = 240.dp),
+                            if (video) "Video message" else "Picture message", video = video)
+                        if (video) TextButton(onClick = { onPlay(uri, mime) }) {
+                            Icon(Icons.Default.PlayArrow, null)
+                            Text("Play video")
                         }
                     }
-                    Text(linkedBody, color = AppColors.TextPrimary, style = MaterialTheme.typography.bodyLarge.copy(fontSize = MaterialTheme.typography.bodyLarge.fontSize * textScale))
+                    if (message.body.isNotBlank()) HighlightedMessageText(
+                        body = message.body,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = MaterialTheme.typography.bodyLarge.fontSize * textScale),
+                        selectionActive = selectionActive,
+                        onMessageClick = onClick,
+                        onMessageLongClick = onLongClick,
+                        onHighlightClick = onHighlightClick,
+                        onHighlightCopy = onHighlightCopy,
+                    )
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.date)), color = AppColors.TextSecondary, style = MaterialTheme.typography.labelSmall)
                 if (message.type == android.provider.Telephony.Sms.MESSAGE_TYPE_FAILED) {
-                    Text("Failed", color = AppColors.Danger, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Text(message.sendError ?: "Failed", modifier = Modifier.weight(1f, fill = false), color = AppColors.Danger, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     TextButton(onClick = onRetry, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("Retry", color = AppColors.AccentGreen) }
                 } else if (outgoing && message.type == android.provider.Telephony.Sms.MESSAGE_TYPE_OUTBOX) {
                     Text("Sending", color = AppColors.TextSecondary, style = MaterialTheme.typography.labelSmall)
@@ -364,8 +563,6 @@ private fun MessageBubble(
         }
     }
 }
-
-private val PHONE_NUMBER_CANDIDATE = Regex("(?<![A-Za-z0-9])\\+?(?:\\d[\\s().-]*){7,15}(?![A-Za-z0-9])")
 
 private fun sameDay(first: Long, second: Long): Boolean =
     android.text.format.DateUtils.isToday(first) == android.text.format.DateUtils.isToday(second) &&

@@ -15,8 +15,12 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+data class HistoryPage(val messages: List<SmsRecord> = emptyList(), val hasOlder: Boolean = false)
 
 @HiltViewModel
 class ConversationViewModel @Inject constructor(
@@ -35,8 +39,13 @@ class ConversationViewModel @Inject constructor(
         .map { it.textScale }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 1f)
 
-    val messages: StateFlow<List<SmsRecord>> = repository.observeThread(threadId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val historyLimit = MutableStateFlow(50)
+    fun loadOlderMessages() { historyLimit.value += 50 }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val history = historyLimit.flatMapLatest { limit ->
+        repository.observeThread(threadId, limit + 1).map { HistoryPage(it.takeLast(limit), it.size > limit) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryPage())
     val pinnedMessageIds: StateFlow<Set<Long>> = repository.observeMessageMetadata()
         .map { rows -> rows.filter(MessageMetadataEntity::pinned).map(MessageMetadataEntity::messageId).toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
@@ -48,8 +57,13 @@ class ConversationViewModel @Inject constructor(
 
     fun setMessagePinned(messageId: Long, pinned: Boolean) = viewModelScope.launch { repository.setMessagePinned(messageId, pinned) }
     fun deleteMessages(messageIds: List<Long>) = viewModelScope.launch { repository.deleteMessages(messageIds) }
-    suspend fun send(body: String, subscriptionId: Int) = repository.sendSms(address, body, subscriptionId)
-    suspend fun retry(messageId: Long) = repository.retrySms(messageId)
+    suspend fun send(body: String, subscriptionId: Int, image: Uri? = null) =
+        if (image == null) repository.sendSms(address, body, subscriptionId) else repository.sendAttachment(address, body, image, subscriptionId)
+    suspend fun retry(message: SmsRecord) {
+        val image = message.attachmentUri
+        if (image == null) repository.retrySms(message.id)
+        else repository.sendAttachment(address, message.body, Uri.parse(image), message.subscriptionId)
+    }
     suspend fun setPinned(pinned: Boolean) = repository.setPinned(threadId, pinned)
     suspend fun setArchived(archived: Boolean) = repository.setArchived(threadId, archived)
     fun setTextScale(scale: Float) = viewModelScope.launch { repository.setTextScale(threadId, scale) }

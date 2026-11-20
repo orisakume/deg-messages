@@ -8,21 +8,32 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SimCard
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.example.messages.data.sms.SimOption
 import kotlinx.coroutines.launch
 
+internal val SimOptionSaver = listSaver<SimOption?, Any>(
+    save = { it?.let { option -> listOf(option.subscriptionId, option.displayName, option.slotIndex) }.orEmpty() },
+    restore = { SimOption(it[0] as Int, it[1] as String, it[2] as Int) },
+)
+
 @Composable
 fun SimSelector(
     selected: SimOption?,
     loadSubscriptions: suspend () -> List<SimOption>,
+    autoSelect: Boolean = true,
     onSelected: (SimOption) -> Unit,
 ) {
     val context = LocalContext.current
@@ -50,7 +61,7 @@ fun SimSelector(
                 SubscriptionManager.INVALID_SUBSCRIPTION_ID
             }
             val current = active.firstOrNull { it.subscriptionId == defaultId } ?: active.singleOrNull()
-            if (current != null) onSelected(current)
+            if (autoSelect && current != null && active.none { it.subscriptionId == selected?.subscriptionId }) onSelected(current)
         }
     }
 
@@ -59,7 +70,8 @@ fun SimSelector(
         else permissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
     }) {
         Icon(Icons.Default.SimCard, contentDescription = null)
-        Text(selected?.displayName ?: "SIM")
+        Text(selected?.displayName ?: "Choose SIM", modifier = Modifier.widthIn(max = 110.dp),
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 
     choices?.let { active ->
@@ -70,7 +82,7 @@ fun SimSelector(
                 androidx.compose.foundation.layout.Column {
                     active.forEach { sim ->
                         DropdownMenuItem(
-                            text = { Text("SIM ${sim.slotIndex + 1} · ${sim.displayName}") },
+                            text = { Text("${sim.displayName} · SIM ${sim.slotIndex + 1}") },
                             onClick = { onSelected(sim); choices = null },
                         )
                     }

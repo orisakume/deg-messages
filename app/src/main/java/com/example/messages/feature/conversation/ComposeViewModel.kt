@@ -1,5 +1,6 @@
 package com.example.messages.feature.conversation
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.messages.data.sms.ContactCandidate
@@ -28,9 +29,10 @@ class ComposeViewModel @Inject constructor(private val repository: SmsRepository
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     suspend fun subscriptions(): List<SimOption> = repository.activeSubscriptions()
-    suspend fun send(address: String, body: String, subscriptionId: Int): Long {
+    suspend fun send(address: String, body: String, subscriptionId: Int, image: Uri? = null): Long {
+        if (image != null) return repository.sendAttachment(address, body, image, subscriptionId)
         repository.sendSms(address, body, subscriptionId)
-        return repository.findOrCreateThread(address)
+        return repository.findOrCreateThread(address.trim())
     }
     fun updateContactQuery(value: String) { query.value = value }
     fun refreshContacts() { contactRefreshVersion.value += 1 }

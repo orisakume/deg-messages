@@ -19,6 +19,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
     @Inject lateinit var repository: SmsRepository
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (isAppPinEnabled(context)) return
         val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
         val threadId = intent.getLongExtra(EXTRA_THREAD_ID, -1L)
         when (intent.action) {

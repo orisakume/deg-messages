@@ -7,6 +7,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import com.example.messages.feature.schedule.ScheduledSmsScreen
+import com.example.messages.feature.settings.PinGate
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -16,9 +21,11 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -45,6 +52,8 @@ import com.example.messages.feature.otp.OtpBadgeViewModel
 import com.example.messages.feature.recyclebin.RecycleBinScreen
 import com.example.messages.feature.spam.SpamScreen
 import com.example.messages.feature.settings.SettingsScreen
+import com.example.messages.feature.settings.SettingsDetailScreen
+import com.example.messages.feature.settings.SettingsDestination
 import com.example.messages.feature.settings.AboutScreen
 import com.example.messages.platform.DefaultSmsRole
 
@@ -54,6 +63,11 @@ private enum class Destination(val route: String, val label: String) {
 
 @Composable
 fun MessagesRoot(openThreadId: Long = -1L, openAddress: String = "", onOpenTargetConsumed: () -> Unit = {}) {
+    PinGate { MessagesNavigation(openThreadId, openAddress, onOpenTargetConsumed) }
+}
+
+@Composable
+private fun MessagesNavigation(openThreadId: Long, openAddress: String, onOpenTargetConsumed: () -> Unit) {
     val context = LocalContext.current
     var isDefaultSmsApp by remember { mutableStateOf(DefaultSmsRole.isHeld(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -95,7 +109,11 @@ fun MessagesRoot(openThreadId: Long = -1L, openAddress: String = "", onOpenTarge
         return
     }
 
+    val appearance = remember(context) { context.getSharedPreferences("appearance", Context.MODE_PRIVATE) }
+    var transparentNavigationBar by remember(appearance) { mutableStateOf(appearance.getBoolean("transparent_bottom_bar", true)) }
     val navController = rememberNavController()
+    var forwardedText by rememberSaveable { mutableStateOf("") }
+    var forwardedImage by rememberSaveable { mutableStateOf<String?>(null) }
     val otpBadgeViewModel: OtpBadgeViewModel = hiltViewModel()
     val otpCount by otpBadgeViewModel.count.collectAsStateWithLifecycle()
     LaunchedEffect(openThreadId, openAddress) {
@@ -108,6 +126,8 @@ fun MessagesRoot(openThreadId: Long = -1L, openAddress: String = "", onOpenTarge
     }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    val showBottomBar = Destination.entries.any { it.route == currentRoute }
+    val drawBehindBottomBar = showBottomBar && transparentNavigationBar
     val navigateToTab: (Destination) -> Unit = { destination ->
         navController.navigate(destination.route) {
             popUpTo(navController.graph.findStartDestination().id) { saveState = true }
@@ -118,8 +138,11 @@ fun MessagesRoot(openThreadId: Long = -1L, openAddress: String = "", onOpenTarge
     Scaffold(
         containerColor = AppColors.Background,
         bottomBar = {
-            if (currentRoute in Destination.entries.map(Destination::route)) {
-                NavigationBar(containerColor = AppColors.Surface) {
+            if (showBottomBar) {
+                NavigationBar(
+                    containerColor = if (transparentNavigationBar) AppColors.Surface.copy(alpha = 0.76f) else AppColors.Surface,
+                    tonalElevation = if (transparentNavigationBar) 0.dp else NavigationBarDefaults.Elevation,
+                ) {
                     Destination.entries.forEach { destination ->
                         val selected = currentRoute == destination.route
                         NavigationBarItem(
@@ -153,46 +176,77 @@ fun MessagesRoot(openThreadId: Long = -1L, openAddress: String = "", onOpenTarge
             }
         },
     ) { padding ->
+        val bottomBarSpace by rememberUpdatedState(if (drawBehindBottomBar) padding.calculateBottomPadding() else 0.dp)
+        val layoutDirection = LocalLayoutDirection.current
+        val contentPadding = if (drawBehindBottomBar) PaddingValues(
+            start = padding.calculateStartPadding(layoutDirection), top = padding.calculateTopPadding(),
+            end = padding.calculateEndPadding(layoutDirection),
+        ) else padding
+        Box(Modifier.fillMaxSize().padding(contentPadding), contentAlignment = Alignment.TopCenter) {
         NavHost(
             navController,
             startDestination = Destination.Chats.route,
-            modifier = Modifier.padding(padding),
+            modifier = Modifier.fillMaxHeight().widthIn(max = 960.dp).fillMaxWidth(),
+            enterTransition = { fadeIn(tween(170)) },
+            exitTransition = { fadeOut(tween(120)) },
         ) {
             composable(Destination.Chats.route) {
                 InboxScreen(
                     onOpenConversation = { threadId, address -> navController.navigate("conversation/$threadId/${Uri.encode(address)}") },
-                    onCompose = { navController.navigate("compose") },
+                    onCompose = { forwardedText = ""; forwardedImage = null; navController.navigate("compose") },
                     onOpenRecycleBin = { navController.navigate("recycle_bin") },
                     onOpenSpam = { navController.navigate("spam") },
+                    bottomBarSpace = bottomBarSpace,
                 )
             }
             composable(
                 route = "conversation/{threadId}/{address}",
                 arguments = listOf(navArgument("threadId") { type = NavType.StringType }, navArgument("address") { type = NavType.StringType }),
             ) { entry ->
-                ConversationScreen(onBack = { navController.popBackStack() })
+                ConversationScreen(onBack = { navController.popBackStack() }, onForward = { text, image ->
+                    forwardedText = text
+                    forwardedImage = image
+                    navController.navigate("compose")
+                })
             }
             composable("compose") {
                 ComposeScreen(
+                    forwardedText = forwardedText,
+                    forwardedImage = forwardedImage,
                     onBack = { navController.popBackStack() },
                     onConversation = { threadId, address ->
+                        forwardedText = ""
+                        forwardedImage = null
                         navController.navigate("conversation/$threadId/${Uri.encode(address)}") {
                             popUpTo("compose") { inclusive = true }
                         }
                     },
                 )
             }
-            composable(Destination.Otps.route) { OtpScreen() }
+            composable(Destination.Otps.route) { OtpScreen(bottomBarSpace = bottomBarSpace) }
             composable(Destination.Settings.route) {
-                SettingsScreen(
-                    onRecycleBin = { navController.navigate("recycle_bin") },
-                    onSpam = { navController.navigate("spam") },
-                    onAbout = { navController.navigate("about") },
-                )
+                SettingsScreen(onOpen = { navController.navigate(it.route) }, bottomBarSpace = bottomBarSpace)
             }
+            SettingsDestination.entries.filter { it.hasSettingsPage }.forEach { destination ->
+                composable(destination.route) {
+                    SettingsDetailScreen(
+                        destination = destination,
+                        onBack = { navController.popBackStack() },
+                        onOpenRecycleBin = { navController.navigate("recycle_bin") },
+                        onOpenSpam = { navController.navigate("spam") },
+                        transparentNavigationBar = transparentNavigationBar,
+                        onTransparentNavigationBarChange = { enabled ->
+                            transparentNavigationBar = enabled
+                            appearance.edit().putBoolean("transparent_bottom_bar", enabled).apply()
+                        },
+                    )
+                }
+            }
+            composable("scheduled") { ScheduledSmsScreen { navController.popBackStack() } }
             composable("about") { AboutScreen(onBack = { navController.popBackStack() }) }
             composable("recycle_bin") { RecycleBinScreen(onBack = { navController.popBackStack() }) }
             composable("spam") { SpamScreen(onBack = { navController.popBackStack() }) }
+        }
         }
     }
 

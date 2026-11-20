@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 class CopyOtpReceiver : BroadcastReceiver() {
     @Inject lateinit var dao: OtpRecordDao
     override fun onReceive(context: Context, intent: Intent) {
+        if (isAppPinEnabled(context)) return
         val id = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
         if (id < 0L) return
         val pending = goAsync()

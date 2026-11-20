@@ -1,0 +1,4 @@
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="mms_payloads" path="mms-payloads/" />
+    <cache-path name="shared_images" path="shared-images/" />
+</paths>

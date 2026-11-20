@@ -37,6 +37,15 @@ class SmsDeliveryReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 val messageId = repository.receiveSms(address, body, timestamp, subscriptionId) ?: return@launch
+                val threadId = repository.threadIdForMessage(messageId) ?: return@launch
+                val blocked = repository.isBlockedNumber(address)
+                val filterSpam = context.getSharedPreferences("spam_protection", Context.MODE_PRIVATE).getBoolean("automatic", true)
+                val suspicious = filterSpam && com.example.messages.data.sms.isLikelyPhishing(body) &&
+                    repository.contactDetails(address).displayName.isBlank()
+                val spam = blocked || suspicious || repository.isSpam(threadId)
+                if (blocked || suspicious) repository.setSpam(threadId, true)
+                if (spam) return@launch
+                repository.setArchived(threadId, false)
                 val otp = OtpDetector.detect(body)
                 if (otp != null) {
                     otpDao.upsert(
@@ -49,11 +58,7 @@ class SmsDeliveryReceiver : BroadcastReceiver() {
                         ),
                     )
                 }
-                val threadId = repository.threadIdForMessage(messageId) ?: return@launch
-                repository.setArchived(threadId, false)
-                val blocked = repository.isBlockedNumber(address)
-                if (blocked) repository.setSpam(threadId, true)
-                if (!blocked && !repository.isSpam(threadId) && !repository.isMuted(threadId)) SmsNotifications.showIncoming(context, threadId, address, body, otp, messageId)
+                if (!repository.isMuted(threadId)) SmsNotifications.showIncoming(context, threadId, address, body, otp, messageId)
             } catch (_: SecurityException) {
                 // SMS Provider permissions are controlled by the SMS role.
             } finally {

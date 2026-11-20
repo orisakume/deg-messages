@@ -17,6 +17,8 @@ class MessagesApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Thread({
+            com.example.messages.data.schedule.ScheduledSmsStore(this).restoreQueuedWork()
+            com.example.messages.data.mms.MmsStore(this).removeOldPayloads()
             WorkManager.getInstance(this).enqueueUniquePeriodicWork(
                 "otp-expiration-cleanup",
                 ExistingPeriodicWorkPolicy.UPDATE,

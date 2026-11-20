@@ -1,8 +1,4 @@
-# Google Play listing draft
-
-This copy is based on the current Version 1 implementation. It is not a
-published listing. A publicly hosted privacy policy URL and approved release
-signing identity are still required before submission.
+# Google Play listing
 
 ## App name
 
@@ -10,45 +6,29 @@ DEG Messages
 
 ## Short description
 
-An SMS app with local OTP tools, private notification controls, and message recovery.
+Dual-SIM SMS, scheduled texts, OTP tools, and an optional app lock.
 
 ## Full description
 
-DEG Messages is a native Android SMS app for managing everyday text
-conversations on your device.
+DEG Messages is an Android app for managing your text conversations on your device. Set it as your default SMS app to send, receive, and organize messages.
 
-FEATURES
+- Choose your sending SIM and schedule SMS with edit, cancel, and retry.
+- Send photos or short videos over MMS on supported carriers. Photo resolution can be adjusted before sending. Incoming MMS downloads are unavailable.
+- Search by message, contact, date, or category. Organize texts and OTPs with local categorization and spam controls.
+- Copy highlighted links, phone numbers, OTPs, or email addresses with a long press.
+- Create quick replies, manage deleted messages in the Recycle Bin, and back up SMS and outgoing photos to a location you choose.
+- Protect the app interface with a PIN, password, or fingerprint on supported devices.
 
-• Browse and search SMS conversations.
-• Send and receive SMS when selected as your device's default SMS app.
-• Find verification codes with on-device OTP detection and copy a detected
-  code from its notification.
-• Choose whether incoming notifications show message content.
-• Copy a detected phone number or delete a message from its notification.
-• Recover deleted messages from the local Recycle Bin before they expire.
-• Use archive, pin, mute, read status, optional contacts, and local spam rules.
-
-PRIVACY
-
-The app processes SMS and OTP detection on your device. It has no account,
-advertising, analytics, or backend. SMS is transmitted by Android and your
-carrier in the usual way; ordinary SMS is not end-to-end encrypted. Contact
-access is optional. Review the linked privacy policy for details.
-
-This version supports SMS. MMS, photos, and attachments are not included.
+The app has no accounts, ads, analytics, or developer-operated backend. Android and your carrier deliver SMS and MMS.
 
 ## Category
 
 Communication
 
-## Assets and declarations still needed
+## Privacy policy
 
-- App icon source exists at `app/src/main/res/drawable-nodpi/app_icon.png`.
-- Feature graphic and store screenshots have not been prepared. Capture
-  screenshots from a clean test device without personal messages before listing.
-- Host `PRIVACY_POLICY.md` at a stable public URL after the repository is
-  created; do not submit a local file path as the policy URL.
-- Declare SMS permissions for the app's core SMS handler use and complete the
-  remaining Play Console forms based on the final uploaded artifact and actual
-  behavior. Do not prefill Data Safety or content rating answers without review.
-- Do not add tester email addresses without the account owner's direction.
+https://raw.githubusercontent.com/orisakume/deg-messages/main/PRIVACY_POLICY.md
+
+## SMS permissions declaration
+
+DEG Messages is a default SMS handler. It requests SMS send, read, and receive permissions for composing messages, displaying conversation history, and handling incoming SMS. It uses the MMS and WAP Push receiver declarations for the Android default SMS role and supports outgoing attachments through Android’s carrier MMS service. Incoming MMS downloads are outside the current implementation.

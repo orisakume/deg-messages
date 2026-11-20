@@ -32,11 +32,13 @@ object SmsNotifications {
             context, threadId.toInt(), readIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag(),
         )
-        val hidePreview = context.getSharedPreferences("notification_privacy", Context.MODE_PRIVATE).getBoolean("hide_preview", false)
+        val pinEnabled = isAppPinEnabled(context)
+        val hidePreview = pinEnabled ||
+            context.getSharedPreferences("notification_privacy", Context.MODE_PRIVATE).getBoolean("hide_preview", false)
         val displayBody = if (hidePreview) "New message" else body
         val notification = NotificationCompat.Builder(context, MessagesApplication.MESSAGE_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.sym_action_chat)
-            .setContentTitle(address)
+            .setContentTitle(if (pinEnabled) "DEG Messages" else address)
             .setContentText(displayBody)
             .setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -46,6 +48,7 @@ object SmsNotifications {
             .setContentIntent(content)
             .addAction(android.R.drawable.checkbox_on_background, "Mark as read", markRead)
             .apply {
+                if (pinEnabled) return@apply
                 if (otpCode != null && messageId >= 0L) {
                     val copyIntent = Intent(context, CopyOtpReceiver::class.java)
                         .setAction(CopyOtpReceiver.ACTION_COPY_OTP)

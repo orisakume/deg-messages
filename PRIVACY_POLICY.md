@@ -1,43 +1,27 @@
 # DEG Messages Privacy Policy
 
-Last updated: 8 November 2026
+Last updated November 20, 2026
 
-DEG Messages is an Android SMS application. This project does not include an
-Internet permission, account service, advertising, analytics, tracking, or a
-backend. The app does not send SMS content to a developer-operated server.
+DEG Messages is an Android messaging app. It does not use a developer-operated backend, an account system, advertising, analytics, or tracking. The app does not send message content or contacts to the project maintainers.
 
-## Information handled on the device
+## What the app handles
 
-- Android's SMS Provider supplies the conversations and messages displayed by
-  the app. As the default SMS handler, the app can send and receive SMS through
-  Android and the carrier.
-- OTP detection and notification action detection run locally on the device.
-- Optional contacts permission is used to show saved names/photos and match
-  recipients. Optional phone state access is used to show SIM choices.
-- App metadata, such as pin/archive/mute preferences, OTP records and temporary
-  deleted-message recovery copies, is stored in app-private local storage.
-- Notification previews follow the setting in the app. Android may also apply
-  the device's lock-screen privacy settings.
-- When the user chooses Copy, the selected code or number is placed on the
-  system clipboard.
+- **Messages and numbers.** As your default SMS app, DEG Messages uses Android’s telephony provider to read and manage message history. Android and your carrier transmit SMS and outgoing MMS to the intended recipients. Standard carrier SMS and MMS are not end-to-end encrypted.
+- **Local processing.** Search, message categories, OTP detection, spam filtering, and message highlights are processed on your device. Quick replies, schedules, preferences, and recoverable deleted messages are stored locally. Recycle Bin entries are removed when you delete them permanently or when the configured retention period expires.
+- **Contacts and SIMs.** Optional contacts access shows saved names and photos and helps you choose recipients. Phone state access provides SIM choices.
+- **Notifications and clipboard.** Notification previews follow the app and Android settings. Copying content puts it on Android’s clipboard. When you choose Share or open a link, Android passes the data to the app you select.
+- **App lock.** The PIN or password is verified locally using a verifier backed by Android Keystore. When enabled, fingerprint verification uses Android’s biometric APIs. DEG Messages does not receive or store fingerprint templates.
 
-## Sharing and retention
+## Backups and deletion
 
-Normal SMS is transmitted by Android and the user's carrier to the recipient.
-The app does not provide end-to-end encryption for SMS. Recovery copies remain
-local until permanently deleted or removed by the configured Recycle Bin
-retention cleanup. App data may be removed when the app is uninstalled. Device
-backup is disabled by the app.
+Automatic app backup is disabled. You can manually export SMS and outgoing photo history to a readable JSON file. This file contains message content, phone numbers, dates, and supported attachments and is unencrypted. The Android file picker saves it to the location you choose. A cloud-backed location is subject to that provider’s practices. If app lock is enabled, the app verifies your credential before opening the save dialog. You can delete exported files from their storage location.
+
+Uninstalling removes app-private data such as saved quick replies and local preferences. Messages in the shared Android telephony provider and manually exported backup files may remain. You can manage those messages through your default SMS app and delete backup files separately.
 
 ## Permissions
 
-SMS permissions support the app's core default SMS handler functionality.
-Contacts are optional. Phone state access is used for SIM selection. Android
-notification permission is requested on supported versions so incoming SMS
-notifications can be shown.
+SMS and MMS permissions let the app act as Android’s default SMS handler. The app also uses notification permission to display message alerts, optional contacts access to show recipient information, phone state access to present available SIMs, and biometric permission for optional fingerprint verification.
 
-## Changes and contact
+## Contact
 
-Policy changes will be recorded in the project repository. Contact the project
-maintainers through the repository's issue or contact channels after the
-public repository is available. Do not send private SMS content in a report.
+For privacy questions, contact the project maintainer through the [DEG Messages repository](https://github.com/orisakume/deg-messages). Use the private reporting channel described in [SECURITY.md](SECURITY.md) for security issues. Keep private messages, backup files, and credentials out of public reports.
