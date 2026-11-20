@@ -10,6 +10,7 @@ plugins {
 
 val releaseSigningPropertiesFile = rootProject.file("keystore.properties")
 val unsignedRelease = providers.gradleProperty("unsignedRelease").map(String::toBoolean).getOrElse(false)
+val playBundle = providers.gradleProperty("playBundle").map(String::toBoolean).getOrElse(false)
 val hasReleaseSigning = !unsignedRelease && releaseSigningPropertiesFile.isFile
 val releaseSigningProperties = Properties().apply {
     if (hasReleaseSigning) {
@@ -34,7 +35,7 @@ android {
 
     splits {
         abi {
-            isEnable = true
+            isEnable = !playBundle
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
             isUniversalApk = true

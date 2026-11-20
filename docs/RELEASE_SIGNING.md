@@ -25,3 +25,7 @@ Copy `keystore.properties.example` to `keystore.properties`, set the absolute
 path to the external JKS and local passwords, then run
 `gradlew.bat :app:assembleRelease`. Release builds stay unsigned when the local
 properties file is absent. Do not add signing secrets to CI or GitHub Actions.
+
+Build the Google Play bundle separately with
+`gradlew.bat :app:bundleRelease -PplayBundle=true`. This disables APK splits for
+the bundle build. Google Play generates device-specific APKs from the bundle.
