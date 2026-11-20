@@ -23,7 +23,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.example.messages"
+        applicationId = if (playBundle) "io.github.orisakume.degmessages" else "com.example.messages"
         minSdk = 29
         targetSdk = 37
         versionCode = 5

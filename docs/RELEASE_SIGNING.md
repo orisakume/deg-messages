@@ -29,3 +29,6 @@ properties file is absent. Do not add signing secrets to CI or GitHub Actions.
 Build the Google Play bundle separately with
 `gradlew.bat :app:bundleRelease -PplayBundle=true`. This disables APK splits for
 the bundle build. Google Play generates device-specific APKs from the bundle.
+The Play bundle uses `io.github.orisakume.degmessages`. The GitHub APKs keep
+`com.example.messages` so they can upgrade v1 installs. Android treats the
+Play and GitHub packages as separate apps with separate app-private data.
