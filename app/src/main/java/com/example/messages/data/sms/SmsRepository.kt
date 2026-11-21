@@ -39,6 +39,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.callbackFlow
@@ -47,6 +48,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import com.example.messages.platform.SmsSentReceiver
 import com.example.messages.platform.SmsDeliveryStatusReceiver
@@ -64,6 +66,7 @@ class SmsRepository @Inject constructor(
     private val otpRecordDao: OtpRecordDao,
 ) {
     private val resolver = context.contentResolver
+    private val messageRevision = MutableStateFlow(0L)
     private val contactsCache = android.util.LruCache<String, ContactDetails>(512)
     private val mmsStore = com.example.messages.data.mms.MmsStore(context)
 
@@ -106,7 +109,9 @@ class SmsRepository @Inject constructor(
                 val names = mutableMapOf<String, String>()
                 readAllMessages().asSequence().filter { message ->
                     val name = if (query.field != SearchField.Message && query.text.isNotBlank()) {
-                        names.getOrPut(message.address) { cachedContactDetails(message.address).displayName }
+                        names.getOrPut(message.address) {
+                            cachedContactDetails(message.address).displayName.ifBlank { smsSenderBrand(message.address)?.name.orEmpty() }
+                        }
                     } else ""
                     query.matches(message, name)
                 }.map(SmsRecord::threadId).toSet()
@@ -121,7 +126,8 @@ class SmsRepository @Inject constructor(
     fun observeMessageMetadata(): Flow<List<MessageMetadataEntity>> = messageMetadataDao.observeAll()
     fun observeConversationMetadata() = conversationMetadataDao.observeAll()
 
-    suspend fun loadThread(threadId: Long): List<SmsRecord> = withContext(Dispatchers.IO) { readThread(threadId) }
+    suspend fun loadThread(threadId: Long, limit: Int = Int.MAX_VALUE): List<SmsRecord> =
+        withContext(Dispatchers.IO) { readThread(threadId, limit) }
 
     suspend fun indexHistoricalOtpMessages() = withContext(Dispatchers.IO) {
         val earliest = (System.currentTimeMillis() - OtpRecordEntity.EXPIRATION_MS).toString()
@@ -260,12 +266,46 @@ class SmsRepository @Inject constructor(
         conversationMetadataDao.delete(threadIds)
     }
 
-    suspend fun deleteMessages(messageIds: List<Long>) = withContext(Dispatchers.IO) {
-        if (messageIds.isEmpty()) return@withContext
-        messageIds.filter { it < 0 }.forEach(mmsStore::delete)
-        val smsIds = messageIds.filter { it >= 0 }
-        if (smsIds.isNotEmpty()) recycleBin.deleteMessages(smsIds)
-        messageMetadataDao.delete(messageIds)
+    suspend fun deleteMessages(messageIds: List<Long>): Int = withContext(Dispatchers.IO) {
+        if (messageIds.isEmpty()) return@withContext 0
+        val mmsIds = messageIds.filter { it < 0 }.distinct()
+        val deleted = mmsIds.filter(mmsStore::delete) + recycleBin.deleteMessages(messageIds.filter { it >= 0 })
+        if (deleted.isNotEmpty()) {
+            messageRevision.update { it + 1 }
+            messageMetadataDao.delete(deleted)
+        }
+        deleted.size
+    }
+
+    suspend fun deleteOtpMessage(otp: OtpRecordEntity, requireRecovery: Boolean = false): Boolean {
+        if (!recycleBin.deleteOtpSms(otp, requireRecovery)) return false
+        messageRevision.update { it + 1 }
+        messageMetadataDao.delete(listOf(otp.messageId))
+        return true
+    }
+
+    suspend fun expiredOtpsInThread(threadId: Long): List<OtpRecordEntity> = withContext(Dispatchers.IO) {
+        val cutoff = System.currentTimeMillis() - OtpRecordEntity.EXPIRATION_MS
+        readRecords(
+            Telephony.Sms.Inbox.CONTENT_URI, "${Telephony.Sms.THREAD_ID}=? AND ${Telephony.Sms.DATE}<=?",
+            arrayOf(threadId.toString(), cutoff.toString()), null,
+        ).mapNotNull { message ->
+            if (messageMetadataDao.get(message.id)?.pinned == true) return@mapNotNull null
+            val existing = otpRecordDao.get(message.id)
+            if (existing?.dismissed == true) return@mapNotNull null
+            val code = OtpDetector.detect(message.body) ?: return@mapNotNull null
+            OtpRecordEntity(message.id, code, message.address, message.date)
+        }
+    }
+
+    suspend fun expireOtps(moveMessages: Boolean, now: Long = System.currentTimeMillis()) = withContext(Dispatchers.IO) {
+        if (moveMessages) {
+            if (!com.example.messages.platform.DefaultSmsRole.isHeld(context) || !recycleBin.isEnabled()) return@withContext
+            otpRecordDao.expiredSources(now - OtpRecordEntity.EXPIRATION_MS).forEach { otp ->
+                if (messageMetadataDao.get(otp.messageId)?.pinned != true) deleteOtpMessage(otp, requireRecovery = true)
+            }
+        }
+        otpRecordDao.deleteExpired(now)
     }
 
     suspend fun markIncomingReadForThread(threadId: Long) = markThreadRead(threadId, true)
@@ -398,7 +438,9 @@ class SmsRepository @Inject constructor(
         sendSms(record.address, record.body, record.subscriptionId)
     }
 
-    private fun messageChanges() = providerChanges(Telephony.Sms.CONTENT_URI, Telephony.Mms.CONTENT_URI).conflate()
+    private fun messageChanges() = providerChanges(Telephony.Sms.CONTENT_URI, Telephony.Mms.CONTENT_URI)
+        .combine(messageRevision) { _, _ -> Unit }
+        .conflate()
 
     private fun contactChanges(): Flow<Unit> = if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
         android.content.pm.PackageManager.PERMISSION_GRANTED) {

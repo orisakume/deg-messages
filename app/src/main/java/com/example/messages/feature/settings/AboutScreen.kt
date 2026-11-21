@@ -49,7 +49,7 @@ fun AboutScreen(onBack: () -> Unit) {
                     "Send and receive SMS through Android's default SMS app role.",
                     "Inbox filters, search, saved contact names and photos, archive, pin, mute, read status, and multi-select.",
                     "Conversation history, message selection, copy, pin, text-size gesture, and send failure retry.",
-                    "On-device OTP detection, search, code correction, and copy. OTP cards expire after 24 hours or four copies; the source SMS stays in chat.",
+                    "On-device OTP detection, search, code correction, and copy. OTP cards expire after 24 hours or four copies, with optional cleanup of expired OTP texts.",
                     "Phone numbers in conversations are highlighted; tap to copy or open the system dialer.",
                     "New-message notifications with configurable message previews and context-aware actions.",
                     "Recycle Bin with restore and configurable retention when enabled.",

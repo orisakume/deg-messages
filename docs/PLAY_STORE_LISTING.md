@@ -16,10 +16,15 @@ DEG Messages is an Android app for managing your text conversations on your devi
 - Send photos or short videos over MMS on supported carriers. Photo resolution can be adjusted before sending. Incoming MMS downloads are unavailable.
 - Search by message, contact, date, or category. Organize texts and OTPs with local categorization and spam controls.
 - Copy highlighted links, phone numbers, OTPs, or email addresses with a long press.
+- See offline brand logos for supported SMS senders, with their original sender IDs visible.
 - Create quick replies, manage deleted messages in the Recycle Bin, and back up SMS and outgoing photos to a location you choose.
 - Protect the app interface with a PIN, password, or fingerprint on supported devices.
 
 The app has no accounts, ads, analytics, or developer-operated backend. Android and your carrier deliver SMS and MMS.
+
+## v2.3.0 testing release notes
+
+The reply composer now sits directly above the keyboard. Deleting a selected SMS in a conversation or the OTP tab preserves the other messages. Back brings the remaining conversation into view. This release adds offline brand logos, recognizes four-, six-, and eight-digit OTPs, and improves category navigation and message highlights.
 
 ## Category
 

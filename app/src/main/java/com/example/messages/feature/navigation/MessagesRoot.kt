@@ -111,9 +111,11 @@ private fun MessagesNavigation(openThreadId: Long, openAddress: String, onOpenTa
 
     val appearance = remember(context) { context.getSharedPreferences("appearance", Context.MODE_PRIVATE) }
     var transparentNavigationBar by remember(appearance) { mutableStateOf(appearance.getBoolean("transparent_bottom_bar", true)) }
+    var showChatCategories by remember(appearance) { mutableStateOf(appearance.getBoolean("show_chat_categories", true)) }
     val navController = rememberNavController()
     var forwardedText by rememberSaveable { mutableStateOf("") }
     var forwardedImage by rememberSaveable { mutableStateOf<String?>(null) }
+    var editedInboxThread by remember { mutableStateOf<Pair<Long, Long>?>(null) }
     val otpBadgeViewModel: OtpBadgeViewModel = hiltViewModel()
     val otpCount by otpBadgeViewModel.count.collectAsStateWithLifecycle()
     LaunchedEffect(openThreadId, openAddress) {
@@ -182,7 +184,7 @@ private fun MessagesNavigation(openThreadId: Long, openAddress: String, onOpenTa
             start = padding.calculateStartPadding(layoutDirection), top = padding.calculateTopPadding(),
             end = padding.calculateEndPadding(layoutDirection),
         ) else padding
-        Box(Modifier.fillMaxSize().padding(contentPadding), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.fillMaxSize().padding(contentPadding).consumeWindowInsets(contentPadding), contentAlignment = Alignment.TopCenter) {
         NavHost(
             navController,
             startDestination = Destination.Chats.route,
@@ -192,22 +194,36 @@ private fun MessagesNavigation(openThreadId: Long, openAddress: String, onOpenTa
         ) {
             composable(Destination.Chats.route) {
                 InboxScreen(
-                    onOpenConversation = { threadId, address -> navController.navigate("conversation/$threadId/${Uri.encode(address)}") },
+                    onOpenConversation = { threadId, address ->
+                        editedInboxThread = null
+                        navController.navigate("conversation/$threadId/${Uri.encode(address)}")
+                    },
                     onCompose = { forwardedText = ""; forwardedImage = null; navController.navigate("compose") },
                     onOpenRecycleBin = { navController.navigate("recycle_bin") },
                     onOpenSpam = { navController.navigate("spam") },
+                    showCategories = showChatCategories,
                     bottomBarSpace = bottomBarSpace,
+                    editedThread = editedInboxThread,
+                    onEditedThreadShown = { editedInboxThread = null },
                 )
             }
             composable(
                 route = "conversation/{threadId}/{address}",
                 arguments = listOf(navArgument("threadId") { type = NavType.StringType }, navArgument("address") { type = NavType.StringType }),
             ) { entry ->
-                ConversationScreen(onBack = { navController.popBackStack() }, onForward = { text, image ->
-                    forwardedText = text
-                    forwardedImage = image
-                    navController.navigate("compose")
-                })
+                ConversationScreen(
+                    onBack = { navController.popBackStack() },
+                    onForward = { text, image ->
+                        forwardedText = text
+                        forwardedImage = image
+                        navController.navigate("compose")
+                    },
+                    onMessagesDeleted = { id, latestDate ->
+                        if (navController.previousBackStackEntry?.destination?.route == Destination.Chats.route) {
+                            editedInboxThread = latestDate?.let { id to it }
+                        }
+                    },
+                )
             }
             composable("compose") {
                 ComposeScreen(
@@ -225,7 +241,15 @@ private fun MessagesNavigation(openThreadId: Long, openAddress: String, onOpenTa
             }
             composable(Destination.Otps.route) { OtpScreen(bottomBarSpace = bottomBarSpace) }
             composable(Destination.Settings.route) {
-                SettingsScreen(onOpen = { navController.navigate(it.route) }, bottomBarSpace = bottomBarSpace)
+                SettingsScreen(
+                    onOpen = { navController.navigate(it.route) },
+                    showChatCategories = showChatCategories,
+                    onShowChatCategoriesChange = { enabled ->
+                        showChatCategories = enabled
+                        appearance.edit().putBoolean("show_chat_categories", enabled).apply()
+                    },
+                    bottomBarSpace = bottomBarSpace,
+                )
             }
             SettingsDestination.entries.filter { it.hasSettingsPage }.forEach { destination ->
                 composable(destination.route) {

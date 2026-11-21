@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.messages.core.database.ConversationMetadataEntity
 import com.example.messages.data.sms.ContactDetails
 import com.example.messages.core.database.MessageMetadataEntity
+import com.example.messages.core.database.OtpRecordEntity
 import com.example.messages.data.sms.SmsRecord
 import com.example.messages.data.sms.SmsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -56,7 +57,11 @@ class ConversationViewModel @Inject constructor(
     }
 
     fun setMessagePinned(messageId: Long, pinned: Boolean) = viewModelScope.launch { repository.setMessagePinned(messageId, pinned) }
-    fun deleteMessages(messageIds: List<Long>) = viewModelScope.launch { repository.deleteMessages(messageIds) }
+    suspend fun deleteMessages(messageIds: List<Long>): Int = repository.deleteMessages(messageIds)
+    suspend fun latestMessageDate(): Long? = repository.loadThread(threadId, limit = 1).lastOrNull()?.date
+    suspend fun expiredOtps() = repository.expiredOtpsInThread(threadId)
+    suspend fun moveExpiredOtps(messages: List<OtpRecordEntity>): Int =
+        messages.count { repository.deleteOtpMessage(it, requireRecovery = true) }
     suspend fun send(body: String, subscriptionId: Int, image: Uri? = null) =
         if (image == null) repository.sendSms(address, body, subscriptionId) else repository.sendAttachment(address, body, image, subscriptionId)
     suspend fun retry(message: SmsRecord) {

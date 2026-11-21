@@ -3,8 +3,16 @@ package com.example.messages.platform
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import android.text.style.UnderlineSpan
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -12,6 +20,11 @@ import android.Manifest
 import android.content.pm.PackageManager
 import com.example.messages.MainActivity
 import com.example.messages.MessagesApplication
+import com.example.messages.R
+import com.example.messages.core.design.MESSAGE_HIGHLIGHT_BACKGROUND
+import com.example.messages.core.design.RUPEE_HIGHLIGHT_COLOR
+import com.example.messages.core.design.highlightColor
+import com.example.messages.data.sms.messageHighlights
 
 object SmsNotifications {
     fun showIncoming(context: Context, threadId: Long, address: String, body: String, otpCode: String? = null, messageId: Long = -1L) {
@@ -35,12 +48,12 @@ object SmsNotifications {
         val pinEnabled = isAppPinEnabled(context)
         val hidePreview = pinEnabled ||
             context.getSharedPreferences("notification_privacy", Context.MODE_PRIVATE).getBoolean("hide_preview", false)
-        val displayBody = if (hidePreview) "New message" else body
+        val displayBody = if (hidePreview) "New message" else highlightedPreview(body.take(5_120))
+        val title = if (pinEnabled) "DEG Messages" else address
         val notification = NotificationCompat.Builder(context, MessagesApplication.MESSAGE_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.sym_action_chat)
-            .setContentTitle(if (pinEnabled) "DEG Messages" else address)
+            .setContentTitle(title)
             .setContentText(displayBody)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -48,6 +61,15 @@ object SmsNotifications {
             .setContentIntent(content)
             .addAction(android.R.drawable.checkbox_on_background, "Mark as read", markRead)
             .apply {
+                if (displayBody is Spanned) {
+                    // The standard Android template can recolor or strip styled text.
+                    setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                    setCustomContentView(previewView(context, title, displayBody, maxLines = 1))
+                    setCustomBigContentView(previewView(context, title, displayBody, maxLines = 7))
+                    setCustomHeadsUpContentView(previewView(context, title, displayBody, maxLines = 1))
+                } else {
+                    setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
+                }
                 if (pinEnabled) return@apply
                 if (otpCode != null && messageId >= 0L) {
                     val copyIntent = Intent(context, CopyOtpReceiver::class.java)
@@ -88,6 +110,31 @@ object SmsNotifications {
     }
 
     fun cancel(context: Context, threadId: Long) = NotificationManagerCompat.from(context).cancel(threadId.toInt())
+
+    private fun previewView(context: Context, sender: String, body: Spanned, maxLines: Int): RemoteViews =
+        RemoteViews(context.packageName, R.layout.notification_highlighted_message).apply {
+            setTextViewText(R.id.notification_sender, sender)
+            setTextViewText(R.id.notification_message, body)
+            setInt(R.id.notification_message, "setMaxLines", maxLines)
+        }
+
+    private fun highlightedPreview(body: String): CharSequence {
+        val highlights = messageHighlights(body)
+        if (highlights.actions.isEmpty() && highlights.rupeeMarkers.isEmpty()) return body
+        val preview = SpannableString(body)
+        fun style(range: IntRange, color: Long, underline: Boolean) {
+            val start = range.first
+            val end = range.last + 1
+            val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            preview.setSpan(ForegroundColorSpan(color.toInt()), start, end, flags)
+            preview.setSpan(BackgroundColorSpan(MESSAGE_HIGHLIGHT_BACKGROUND.toInt()), start, end, flags)
+            preview.setSpan(StyleSpan(Typeface.BOLD), start, end, flags)
+            if (underline) preview.setSpan(UnderlineSpan(), start, end, flags)
+        }
+        highlights.actions.forEach { style(it.range, it.kind.highlightColor, underline = true) }
+        highlights.rupeeMarkers.forEach { style(it, RUPEE_HIGHLIGHT_COLOR, underline = false) }
+        return preview
+    }
 
     private fun immutableFlag(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
 

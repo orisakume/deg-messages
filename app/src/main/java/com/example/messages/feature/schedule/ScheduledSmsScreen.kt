@@ -51,9 +51,12 @@ fun ScheduledSmsScreen(viewModel: ComposeViewModel = hiltViewModel(), onBack: ()
         }
     }
     Scaffold(containerColor = AppColors.Background, topBar = {
-        TopAppBar(title = { Text("Scheduled SMS") }, navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-        }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background))
+        TopAppBar(
+            title = { Text("Scheduled SMS") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+            windowInsets = WindowInsets(0, 0, 0, 0),
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
+        )
     }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {

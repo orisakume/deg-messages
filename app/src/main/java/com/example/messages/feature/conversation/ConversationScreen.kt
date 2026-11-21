@@ -14,6 +14,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +35,7 @@ import com.example.messages.data.sms.MessageHighlight
 import com.example.messages.core.design.ActionTone
 import com.example.messages.core.design.SheetAction
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -44,9 +48,10 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.TimerOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -63,9 +68,12 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.messages.core.design.AppColors
+import com.example.messages.core.design.OverflowIcon
+import com.example.messages.core.database.OtpRecordEntity
 import com.example.messages.data.sms.SimOption
 import com.example.messages.data.sms.SmsRecord
 import com.example.messages.data.sms.canReplyToSmsAddress
+import com.example.messages.data.sms.smsSenderBrand
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -76,12 +84,18 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit, viewModel: ConversationViewModel = hiltViewModel()) {
+fun ConversationScreen(
+    onBack: () -> Unit,
+    onForward: (String, String?) -> Unit,
+    onMessagesDeleted: (Long, Long?) -> Unit,
+    viewModel: ConversationViewModel = hiltViewModel(),
+) {
     val history by viewModel.history.collectAsStateWithLifecycle()
     val messages = history.messages
     val pinnedIds by viewModel.pinnedMessageIds.collectAsStateWithLifecycle()
     val conversationMetadata by viewModel.conversationMetadata.collectAsStateWithLifecycle()
     val contactDetails by viewModel.contactDetails.collectAsStateWithLifecycle()
+    val senderBrand = remember(viewModel.address) { smsSenderBrand(viewModel.address) }
     val savedTextScale by viewModel.textScale.collectAsStateWithLifecycle()
     var textScale by remember(viewModel.threadId) { mutableFloatStateOf(1f) }
     var scaleSaveJob by remember { mutableStateOf<Job?>(null) }
@@ -92,6 +106,7 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
     var scheduleDraft by remember { mutableStateOf<String?>(null) }
     var scheduleComposer by remember { mutableStateOf(false) }
     var actionMessage by remember { mutableStateOf<SmsRecord?>(null) }
+    var textToSelect by remember { mutableStateOf<String?>(null) }
     var selectionMenu by remember { mutableStateOf(false) }
     var saveSource by rememberSaveable { mutableStateOf<String?>(null) }
     var sending by remember { mutableStateOf(false) }
@@ -100,7 +115,9 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
     var selectedSim by rememberSaveable(stateSaver = SimOptionSaver) { mutableStateOf<SimOption?>(null) }
     var menu by remember { mutableStateOf(false) }
     var deleteTargets by remember { mutableStateOf<List<SmsRecord>?>(null) }
+    var deletingMessages by remember { mutableStateOf(false) }
     var deleteConversation by remember { mutableStateOf(false) }
+    var expiredOtpsToMove by remember { mutableStateOf<List<OtpRecordEntity>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var highlightAction by remember { mutableStateOf<MessageHighlight?>(null) }
     val context = LocalContext.current
@@ -126,6 +143,7 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
         }
     }
     BackHandler(enabled = selected.isNotEmpty() && !selectionMenu) { selected.clear() }
+    BackHandler(enabled = deletingMessages) { }
     val saveAttachment = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { destination ->
         val source = saveSource
         saveSource = null
@@ -171,9 +189,12 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
                     }
                 })
             }
-            add(SheetAction("Delete", Icons.Default.DeleteOutline, destructive = true) { deleteTargets = targets })
+            add(SheetAction(if (single != null) "Delete message" else "Delete messages", Icons.Default.DeleteOutline, destructive = true) { deleteTargets = targets })
             actionMessage?.let { message ->
                 add(SheetAction("Select", Icons.Default.SelectAll, tone = ActionTone.Blue) { selected.add(message.id) })
+            }
+            if (single != null && body.isNotBlank()) {
+                add(SheetAction("Select text", Icons.Default.TextFields, tone = ActionTone.Teal) { textToSelect = body })
             }
             if (selectionMenu) add(SheetAction(if (selected.size == messages.size) "Deselect all" else "Select all", Icons.Default.SelectAll, tone = ActionTone.Blue) {
                 val allSelected = selected.size == messages.size
@@ -217,27 +238,30 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        contactDetails?.takeIf { it.photoUri.isNotBlank() }?.let { contact ->
-                            Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) { ContactAvatar(contact.photoUri, contact.displayName) }
+                        val contact = contactDetails
+                        val title = contact?.displayName.orEmpty().ifBlank { senderBrand?.name ?: viewModel.address }
+                        if (senderBrand != null || contact?.photoUri?.isNotBlank() == true) {
+                            Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                                ContactAvatar(contact?.photoUri.orEmpty(), title, senderBrand)
+                            }
                         }
-                    Column {
-                        val title = contactDetails?.displayName?.ifBlank { viewModel.address } ?: viewModel.address
-                        Text(title.ifBlank { "Conversation" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (title.isNotBlank() && title != viewModel.address) {
-                            Text(viewModel.address, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
+                        Column {
+                            Text(title.ifBlank { "Conversation" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (title.isNotBlank() && title != viewModel.address) {
+                                Text(viewModel.address, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
+                            }
+                            if (selected.isNotEmpty()) Text("${selected.size} selected", style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
                         }
-                        if (selected.isNotEmpty()) Text("${selected.size} selected", style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary)
-                    }
                     }
                 },
-                navigationIcon = { IconButton(onClick = if (selected.isNotEmpty()) ({ selected.clear() }) else onBack) { Icon(if (selected.isNotEmpty()) Icons.Default.Close else Icons.Default.ArrowBack, contentDescription = if (selected.isNotEmpty()) "Cancel selection" else "Back") } },
+                navigationIcon = { IconButton(enabled = !deletingMessages, onClick = if (selected.isNotEmpty()) ({ selected.clear() }) else onBack) { Icon(if (selected.isNotEmpty()) Icons.Default.Close else Icons.Default.ArrowBack, contentDescription = if (selected.isNotEmpty()) "Cancel selection" else "Back") } },
                 actions = {
                     if (selected.isEmpty()) {
                         if (canReplyToSmsAddress(viewModel.address)) {
                             SimSelector(selectedSim, viewModel::subscriptions) { selectedSim = it }
                         }
                         Box {
-                            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Conversation options") }
+                            IconButton(onClick = { menu = true }) { OverflowIcon("Conversation options") }
                             if (menu) ActionSheet("Conversation actions", buildList {
                                 if (canReplyToSmsAddress(viewModel.address) && text.isNotBlank() && image == null && !sending) {
                                     add(SheetAction("Schedule", Icons.Default.Schedule, tone = ActionTone.Amber) {
@@ -261,11 +285,27 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
                                     }
                                 })
                                 add(SheetAction("Block", Icons.Default.Block, tone = ActionTone.Rose) { scope.launch { viewModel.blockSender(); onBack() } })
-                                add(SheetAction("Delete", Icons.Default.DeleteOutline, destructive = true) { deleteConversation = true })
+                                if (viewModel.recycleBinEnabled) {
+                                    add(SheetAction("Move expired OTPs", Icons.Default.TimerOff, tone = ActionTone.Lilac) {
+                                        scope.launch {
+                                            try {
+                                                val expired = viewModel.expiredOtps()
+                                                if (expired.isEmpty()) snackbar.showSnackbar("No expired OTP messages found in this chat.")
+                                                else expiredOtpsToMove = expired
+                                            } catch (cancelled: CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
+                                                snackbar.showSnackbar("Couldn’t check this chat for expired OTPs.")
+                                            }
+                                        }
+                                    })
+                                }
+                                add(SheetAction("Delete chat", Icons.Default.DeleteOutline, destructive = true) { deleteConversation = true })
                             }) { menu = false }
                         }
                     }
                 },
+                windowInsets = WindowInsets(0, 0, 0, 0),
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
             )
         },
@@ -392,6 +432,28 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
         ActionSheet("Message actions", messageActions) { actionMessage = null }
     }
 
+    textToSelect?.let { body ->
+        AlertDialog(
+            onDismissRequest = { textToSelect = null },
+            title = { Text("Select text") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Press and hold a word, then drag the handles to adjust your selection.")
+                    SelectionContainer {
+                        Text(
+                            body,
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = AppColors.TextPrimary,
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { textToSelect = null }) { Text("Done") } },
+            containerColor = AppColors.SurfaceElevated,
+        )
+    }
+
     scheduleDraft?.let { draft -> ScheduleSmsDialog(viewModel.address, draft,
         selectedSim?.subscriptionId ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID,
         { scheduleDraft = null }, {
@@ -424,17 +486,68 @@ fun ConversationScreen(onBack: () -> Unit, onForward: (String, String?) -> Unit,
 
     deleteTargets?.let { targets -> AlertDialog(
         onDismissRequest = { deleteTargets = null },
-        title = { Text("Delete messages?") },
+        title = { Text(if (targets.size == 1) "Delete this message?" else "Delete ${targets.size} messages?") },
         text = { Text(when {
+            targets.size == 1 && targets[0].attachmentUri == null && viewModel.recycleBinEnabled -> "Only the selected SMS will move to the Recycle Bin."
+            targets.size == 1 -> "Only the selected message will be permanently deleted."
             !viewModel.recycleBinEnabled -> "These messages will be permanently deleted."
             targets.all { it.attachmentUri != null } -> "These MMS messages will be permanently deleted."
             targets.any { it.attachmentUri != null } -> "SMS goes to the Recycle Bin. MMS attachments will be permanently deleted."
             else -> "These messages will be moved to the Recycle Bin for recovery."
         }) },
-        confirmButton = { TextButton(onClick = { viewModel.deleteMessages(targets.map(SmsRecord::id)); selected.clear(); deleteTargets = null }) { Text("Delete", color = AppColors.Danger) } },
+        confirmButton = {
+            TextButton(onClick = {
+                deleteTargets = null
+                selected.clear()
+                deletingMessages = true
+                scope.launch {
+                    val feedback = try {
+                        val deleted = viewModel.deleteMessages(targets.map(SmsRecord::id))
+                        if (deleted > 0) onMessagesDeleted(viewModel.threadId, viewModel.latestMessageDate())
+                        when {
+                            deleted == 0 -> "Couldn’t delete the selected messages."
+                            targets.size == 1 -> "Message deleted"
+                            deleted != targets.size -> "Deleted $deleted of ${targets.size} selected messages."
+                            else -> "$deleted messages deleted"
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        "Couldn’t finish deleting the selected messages."
+                    } finally {
+                        deletingMessages = false
+                    }
+                    snackbar.showSnackbar(feedback)
+                }
+            }) { Text("Delete", color = AppColors.Danger) }
+        },
         dismissButton = { TextButton(onClick = { deleteTargets = null }) { Text("Cancel") } },
         containerColor = AppColors.SurfaceElevated,
     )
+    }
+    expiredOtpsToMove?.let { messages ->
+        AlertDialog(
+            onDismissRequest = { expiredOtpsToMove = null },
+            title = { Text("Move expired OTPs?") },
+            text = { Text("Move ${messages.size} detected OTP ${if (messages.size == 1) "message" else "messages"} older than 24 hours from this chat to the Recycle Bin.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    expiredOtpsToMove = null
+                    scope.launch {
+                        try {
+                            val moved = viewModel.moveExpiredOtps(messages)
+                            snackbar.showSnackbar("Moved $moved of ${messages.size} OTP messages to the Recycle Bin.")
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            snackbar.showSnackbar("Couldn’t finish moving the expired OTP messages.")
+                        }
+                    }
+                }) { Text("Move") }
+            },
+            dismissButton = { TextButton(onClick = { expiredOtpsToMove = null }) { Text("Cancel") } },
+            containerColor = AppColors.SurfaceElevated,
+        )
     }
     if (deleteConversation) AlertDialog(
         onDismissRequest = { deleteConversation = false },

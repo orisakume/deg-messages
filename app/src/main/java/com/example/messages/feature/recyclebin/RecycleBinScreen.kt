@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.SelectAll
@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.messages.core.design.AppColors
+import com.example.messages.core.design.SectionInfoCard
 import com.example.messages.core.database.DeletedItemEntity
 import java.text.DateFormat
 import java.util.Date
@@ -31,20 +32,28 @@ fun RecycleBinScreen(onBack: () -> Unit, viewModel: RecycleBinViewModel = hiltVi
     Scaffold(containerColor = AppColors.Background, topBar = {
         TopAppBar(
             title = { Text(if (selected.isEmpty()) "Recycle Bin" else "${selected.size} selected") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Back") } },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") } },
             actions = {
                 if (selected.isNotEmpty()) {
                     IconButton(onClick = { if (selected.size == items.size) selected.clear() else { selected.clear(); selected.addAll(items.map { it.id }) } }) { Icon(Icons.Default.SelectAll, contentDescription = "Select all deleted messages") }
                     IconButton(onClick = { viewModel.restore(selected.toList()); selected.clear() }) { Icon(Icons.Default.Restore, contentDescription = "Restore selected", tint = AppColors.AccentGreen) }
                     IconButton(onClick = { confirmPermanent = true }) { Icon(Icons.Default.DeleteOutline, contentDescription = "Permanently delete selected", tint = AppColors.Danger) }
                 } else if (items.isNotEmpty()) TextButton(onClick = { confirmEmpty = true }) { Text("Empty", color = AppColors.Danger) }
-            }, colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
+            },
+            windowInsets = WindowInsets(0, 0, 0, 0),
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
         )
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            Text("Deleted messages are kept for up to 30 days in app-private storage. Uninstalling may remove recovery data.", color = AppColors.TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
+            SectionInfoCard(
+                icon = Icons.Default.Restore,
+                accent = AppColors.AccentGreen,
+                title = if (items.size == 1) "1 recoverable message" else "${items.size} recoverable messages",
+                description = "Restore deleted SMS before their recovery period ends.",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
             if (items.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Recycle Bin is empty", color = AppColors.TextSecondary) }
-            LazyColumn {
+            else LazyColumn {
                 items(items, key = DeletedItemEntity::id) { item ->
                     val active = item.id in selected
                     Column(Modifier.fillMaxWidth().combinedClickable(onClick = { if (selected.isNotEmpty()) { if (active) selected.remove(item.id) else selected.add(item.id) } }, onLongClick = { if (!active) selected.add(item.id) }).padding(horizontal = 16.dp, vertical = 12.dp)) {

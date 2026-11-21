@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import com.example.messages.core.database.OtpRecordDao
+import com.example.messages.feature.otp.isExpiredAt
 import com.example.messages.feature.otp.shouldRemoveOtpAfterCopy
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -26,14 +27,11 @@ class CopyOtpReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 val record = dao.get(id) ?: return@launch
+                if (record.dismissed || record.isExpiredAt(System.currentTimeMillis()) || shouldRemoveOtpAfterCopy(record.copyCount)) return@launch
                 context.getSystemService(ClipboardManager::class.java)
                     ?.setPrimaryClip(ClipData.newPlainText("Verification code", record.code))
                     ?: return@launch
-                if (dao.incrementCopyCount(id) > 0 &&
-                    shouldRemoveOtpAfterCopy(dao.get(id)?.copyCount ?: com.example.messages.core.database.OtpRecordEntity.MAX_COPIES)
-                ) {
-                    dao.delete(listOf(id))
-                }
+                dao.incrementCopyCount(id)
                 android.os.Handler(context.mainLooper).post { Toast.makeText(context, "OTP copied", Toast.LENGTH_SHORT).show() }
             } finally { pending.finish() }
         }

@@ -296,10 +296,12 @@ class MmsStore(private val context: Context) {
             date = date, box = if (failed) 5 else 2)
     }
 
-    fun delete(id: Long) {
+    fun delete(id: Long): Boolean {
+        val deleted = resolver.delete(ContentUris.withAppendedId(Telephony.Mms.CONTENT_URI, -id), null, null) == 1
+        if (!deleted) return false
         errors.edit().remove((-id).toString()).apply()
-        resolver.delete(ContentUris.withAppendedId(Telephony.Mms.CONTENT_URI, -id), null, null)
         resolver.notifyChange(Telephony.Mms.CONTENT_URI, null)
+        return true
     }
 
     private companion object { const val MMS_OVERHEAD = 2048 }

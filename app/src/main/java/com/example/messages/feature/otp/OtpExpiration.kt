@@ -16,6 +16,6 @@ internal fun OtpRecordEntity.isExpiredAt(now: Long): Boolean =
     (expiresAt ?: (detectedAt + OtpRecordEntity.EXPIRATION_MS)) <= now
 
 internal fun List<OtpRecordEntity>.visibleAt(now: Long): List<OtpRecordEntity> =
-    filterNot { it.isExpiredAt(now) }
+    filterNot { it.isExpiredAt(now) || shouldRemoveOtpAfterCopy(it.copyCount) }
 
 internal fun shouldRemoveOtpAfterCopy(copyCount: Int): Boolean = copyCount >= OtpRecordEntity.MAX_COPIES

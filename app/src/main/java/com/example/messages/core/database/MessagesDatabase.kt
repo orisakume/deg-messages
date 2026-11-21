@@ -113,8 +113,19 @@ interface BlockedNumberDao {
 
 @Dao
 interface OtpRecordDao {
-    @Query("SELECT * FROM otp_records WHERE dismissed = 0 ORDER BY detectedAt DESC")
+    @Query("""
+        SELECT * FROM otp_records
+        WHERE dismissed = 0 AND NOT EXISTS (
+            SELECT 1 FROM deleted_items WHERE originalMessageId = otp_records.messageId
+        )
+        ORDER BY detectedAt DESC
+    """)
     fun observeAll(): Flow<List<OtpRecordEntity>>
+    @Query("""
+        SELECT * FROM otp_records WHERE dismissed = 0 AND detectedAt <= :cutoff
+        AND NOT EXISTS (SELECT 1 FROM deleted_items WHERE originalMessageId = otp_records.messageId)
+    """)
+    suspend fun expiredSources(cutoff: Long): List<OtpRecordEntity>
     @Query("SELECT * FROM otp_records WHERE messageId = :messageId")
     suspend fun get(messageId: Long): OtpRecordEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -131,8 +142,12 @@ interface OtpRecordDao {
     suspend fun dismiss(messageId: Long)
     @Query("UPDATE otp_records SET code = :code WHERE messageId = :messageId")
     suspend fun correct(messageId: Long, code: String)
-    @Query("UPDATE otp_records SET messageId = :newId WHERE messageId = :oldId")
-    suspend fun retarget(oldId: Long, newId: Long)
+    @Query("""
+        UPDATE otp_records SET messageId = :newId,
+        dismissed = CASE WHEN detectedAt <= :expiredCutoff THEN 1 ELSE dismissed END
+        WHERE messageId = :oldId
+    """)
+    suspend fun retarget(oldId: Long, newId: Long, expiredCutoff: Long)
 }
 
 @Dao

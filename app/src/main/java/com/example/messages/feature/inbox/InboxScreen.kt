@@ -1,15 +1,19 @@
 package com.example.messages.feature.inbox
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import com.example.messages.data.sms.MessageSearch
 import com.example.messages.data.sms.SearchField
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.ScrollState
 import com.example.messages.core.design.ActionSheet
 import com.example.messages.core.design.ActionTone
+import com.example.messages.core.design.OverflowIcon
 import com.example.messages.core.design.SheetAction
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Report
@@ -17,23 +21,24 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sms
-import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +58,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.messages.core.design.AppColors
 import com.example.messages.data.sms.SmsConversation
+import com.example.messages.data.sms.SmsSenderBrand
+import com.example.messages.data.sms.smsSenderBrand
 import java.text.DateFormat
 import java.util.Date
 
@@ -59,10 +67,26 @@ private enum class InboxFilter(val label: String) { All("All"), Unread("Unread")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Unit, onOpenRecycleBin: () -> Unit, onOpenSpam: () -> Unit, bottomBarSpace: Dp = 0.dp, viewModel: InboxViewModel = hiltViewModel()) {
+fun InboxScreen(
+    onOpenConversation: (Long, String) -> Unit,
+    onCompose: () -> Unit,
+    onOpenRecycleBin: () -> Unit,
+    onOpenSpam: () -> Unit,
+    showCategories: Boolean = true,
+    bottomBarSpace: Dp = 0.dp,
+    editedThread: Pair<Long, Long>? = null,
+    onEditedThreadShown: () -> Unit = {},
+    viewModel: InboxViewModel = hiltViewModel(),
+) {
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val selected = remember { mutableStateListOf<Long>() }
-    var filter by remember { mutableStateOf(InboxFilter.All) }
+    var selectedFilter by rememberSaveable { mutableStateOf(InboxFilter.All) }
+    val filter = if (showCategories) selectedFilter else InboxFilter.All
+    val categoryScroll = rememberScrollState()
+    LaunchedEffect(showCategories, filter) {
+        if (!showCategories) selectedFilter = InboxFilter.All
+        if (filter == InboxFilter.All) categoryScroll.scrollTo(0)
+    }
     var searchOpen by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     var advanced by remember { mutableStateOf(MessageSearch()) }
@@ -70,10 +94,25 @@ fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Uni
     val matches by viewModel.matches.collectAsStateWithLifecycle()
     val criteria = advanced.copy(text = search.trim())
     LaunchedEffect(criteria, searchOpen) { viewModel.search(if (searchOpen) criteria else MessageSearch()) }
-    var showArchived by remember { mutableStateOf(false) }
+    var showArchived by rememberSaveable { mutableStateOf(false) }
     var selectionMenu by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<List<Long>?>(null) }
+
+    fun closeSearch() {
+        searchOpen = false
+        search = ""
+        advanced = MessageSearch()
+    }
+
+    BackHandler(enabled = selected.isNotEmpty() || searchOpen || showArchived || filter != InboxFilter.All) {
+        when {
+            selected.isNotEmpty() -> selected.clear()
+            searchOpen -> closeSearch()
+            showArchived -> showArchived = false
+            else -> selectedFilter = InboxFilter.All
+        }
+    }
 
     val advancedSpam = searchOpen && criteria.spamOnly
     val visible = conversations.filter { conversation ->
@@ -82,6 +121,23 @@ fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Uni
             (filter != InboxFilter.Unread || conversation.unreadCount > 0) &&
             (advancedSpam || filter == InboxFilter.All || filter == InboxFilter.Unread || filter == InboxFilter.Spam || conversation.category.name == filter.name) &&
             (!searchOpen || !criteria.hasMessageFilters || matches?.contains(conversation.threadId) == true)
+    }
+    val showCategoryRow = showCategories && !showArchived && selected.isEmpty()
+    val hasCategoryHeader = showCategoryRow && filter == InboxFilter.All && visible.isNotEmpty()
+    val listState = key(filter, showArchived) { rememberLazyListState() }
+    val editedConversation = conversations.firstOrNull { editedThread == (it.threadId to it.date) }
+    val editedRow = editedConversation?.let { edited -> visible.indexOfFirst { it.threadId == edited.threadId } }
+    LaunchedEffect(editedConversation, editedRow, hasCategoryHeader, listState) {
+        val conversation = editedConversation ?: return@LaunchedEffect
+        if (editedRow != null && editedRow >= 0) {
+            listState.scrollToItem(editedRow + if (hasCategoryHeader) 1 else 0)
+            onEditedThreadShown()
+        } else if (conversation.archived == showArchived && !conversation.spam && (filter != InboxFilter.All || searchOpen)) {
+            selectedFilter = InboxFilter.All
+            closeSearch()
+        } else {
+            onEditedThreadShown()
+        }
     }
 
     Scaffold(
@@ -132,14 +188,18 @@ fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Uni
                 },
                 navigationIcon = {
                     if (selected.isNotEmpty()) TextButton(onClick = { selected.clear() }) { Text("Done") }
+                    else if (showArchived) IconButton(onClick = {
+                        closeSearch()
+                        showArchived = false
+                    }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                 },
                 actions = {
                     if (selected.isNotEmpty()) {
                     } else {
-                        IconButton(onClick = { searchOpen = !searchOpen; search = ""; advanced = MessageSearch() }) {
+                        IconButton(onClick = { if (searchOpen) closeSearch() else searchOpen = true }) {
                             Icon(Icons.Default.Search, contentDescription = "Search messages")
                         }
-                        IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, "More options") }
+                        IconButton(onClick = { showMenu = true }) { OverflowIcon("More options") }
                     }
                 },
                 windowInsets = WindowInsets(0, 0, 0, 0),
@@ -158,20 +218,8 @@ fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Uni
                     Text(if (advanced.active || advanced.field != SearchField.Any) "Search filters · On" else "Search filters")
                 }
             }
-            if (!showArchived && selected.isEmpty()) {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    InboxFilter.entries.forEach { option ->
-                        FilterChip(
-                            selected = filter == option,
-                            onClick = { filter = option },
-                            label = { Text(option.label) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = AppColors.AccentGreen,
-                                selectedLabelColor = AppColors.Background,
-                            ),
-                        )
-                    }
-                }
+            if (showCategoryRow && (filter != InboxFilter.All || visible.isEmpty())) {
+                InboxCategories(filter, categoryScroll) { selectedFilter = it }
             }
             if (visible.isEmpty()) {
                 Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -191,7 +239,13 @@ fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Uni
                     )
                 }
             } else {
-                LazyColumn(contentPadding = PaddingValues(bottom = 96.dp + if (selected.isEmpty()) bottomBarSpace else 0.dp)) {
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(bottom = 96.dp + if (selected.isEmpty()) bottomBarSpace else 0.dp),
+                ) {
+                    if (hasCategoryHeader) item(key = "inbox_categories") {
+                        InboxCategories(filter, categoryScroll) { selectedFilter = it }
+                    }
                     items(visible, key = SmsConversation::threadId) { conversation ->
                         val selectedNow = conversation.threadId in selected
                         val swipeState = rememberSwipeToDismissBoxState()
@@ -252,6 +306,8 @@ fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Uni
 
     if (showMenu) ActionSheet("Inbox options", listOf(
         SheetAction(if (showArchived) "Inbox" else "Archived", Icons.Default.Archive, tone = ActionTone.Teal) {
+            closeSearch()
+            selectedFilter = InboxFilter.All
             showArchived = !showArchived
             selected.clear()
         },
@@ -280,6 +336,26 @@ fun InboxScreen(onOpenConversation: (Long, String) -> Unit, onCompose: () -> Uni
 }
 
 @Composable
+private fun InboxCategories(filter: InboxFilter, scrollState: ScrollState, onSelect: (InboxFilter) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(scrollState).padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        InboxFilter.entries.forEach { option ->
+            FilterChip(
+                selected = filter == option,
+                onClick = { onSelect(option) },
+                label = { Text(option.label) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AppColors.AccentGreen,
+                    selectedLabelColor = AppColors.Background,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
 private fun ConversationRow(
     conversation: SmsConversation,
     selected: Boolean,
@@ -292,6 +368,8 @@ private fun ConversationRow(
     onDelete: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
+    val brand = remember(conversation.address) { smsSenderBrand(conversation.address) }
+    val title = if (conversation.displayName == conversation.address) brand?.name ?: conversation.displayName else conversation.displayName
     Column {
         Row(
             modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -309,15 +387,19 @@ private fun ConversationRow(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     if (selected) Icon(Icons.Default.Check, contentDescription = "Selected", tint = AppColors.AccentGreen)
-                    else ContactAvatar(conversation.contactPhotoUri, conversation.displayName)
+                    else ContactAvatar(conversation.contactPhotoUri, title, brand)
                 }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(conversation.displayName, fontWeight = if (conversation.unreadCount > 0) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(title, fontWeight = if (conversation.unreadCount > 0) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (conversation.pinned) Icon(Icons.Default.PushPin, contentDescription = "Pinned", tint = AppColors.AccentGreen, modifier = Modifier.size(16.dp))
                     Text(formatConversationTime(conversation.date), color = AppColors.TextSecondary, style = MaterialTheme.typography.labelSmall)
+                }
+                if (brand != null && title != conversation.address) {
+                    Text(conversation.address, color = AppColors.TextSecondary, style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -329,7 +411,9 @@ private fun ConversationRow(
                         }
                     }
                     Box {
-                        IconButton(onClick = { menu = true }, modifier = Modifier.size(30.dp)) { Icon(Icons.Default.MoreVert, contentDescription = "Conversation actions", tint = AppColors.TextSecondary) }
+                        IconButton(onClick = { menu = true }, modifier = Modifier.size(30.dp)) {
+                            OverflowIcon("Conversation actions", tint = AppColors.TextSecondary)
+                        }
                         if (menu) ActionSheet("Conversation actions", listOf(
                             SheetAction(if (conversation.pinned) "Unpin" else "Pin", Icons.Default.PushPin, tone = ActionTone.Amber, invoke = onPin),
                             SheetAction(if (conversation.archived) "Restore" else "Archive", Icons.Default.Archive, tone = ActionTone.Teal, invoke = onArchive),
@@ -348,7 +432,7 @@ private fun ConversationRow(
 }
 
 @Composable
-internal fun ContactAvatar(photoUri: String, displayName: String) {
+internal fun ContactAvatar(photoUri: String, displayName: String, brand: SmsSenderBrand? = null) {
     val context = LocalContext.current
     val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, photoUri) {
         value = if (photoUri.isBlank()) null else withContext(Dispatchers.IO) {
@@ -372,6 +456,13 @@ internal fun ContactAvatar(photoUri: String, displayName: String) {
             contentDescription = "$displayName profile photo",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().clip(CircleShape),
+        )
+    } else if (brand != null) {
+        Image(
+            painter = painterResource(brand.logo),
+            contentDescription = "${brand.name} logo",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().clip(CircleShape).background(Color.White).padding(5.dp),
         )
     } else {
         Text(displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "?", fontWeight = FontWeight.Bold)

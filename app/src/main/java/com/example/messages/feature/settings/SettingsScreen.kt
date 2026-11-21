@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.Dp
 import com.example.messages.core.design.AppColors
 import com.example.messages.data.mms.ImageResolution
 import com.example.messages.data.recyclebin.RecycleBinRepository
+import com.example.messages.platform.OtpCleanupWorker
 
 internal enum class SettingsDestination(
     val title: String,
@@ -44,7 +45,7 @@ internal enum class SettingsDestination(
     Notifications("Notifications", "Message previews, sounds and lock screen", Icons.Default.Notifications, Color(0xFFFFC780), "settings/notifications"),
     AppLock("App lock", "PIN, password and fingerprint", Icons.Default.Lock, Color(0xFFCDB2FF), "settings/app-lock"),
     Spam("Spam protection", "Automatic filtering and blocked senders", Icons.Default.Shield, Color(0xFFFFA4AF), "settings/spam"),
-    Otp("OTP expiry", "When verification cards disappear", Icons.Default.VerifiedUser, Color(0xFF9CDF9E), "settings/otp"),
+    Otp("OTP expiry", "Verification cards and expired messages", Icons.Default.VerifiedUser, Color(0xFF9CDF9E), "settings/otp"),
     Backup("Backup and restore", "Export or import message history", Icons.Default.Backup, Color(0xFF83DAFC), "settings/backup"),
     Recycle("Recycle Bin", "Recover deleted SMS and set retention", Icons.Default.DeleteOutline, Color(0xFFFFB39E), "settings/recycle"),
     Appearance("Appearance", "Bottom navigation bar style", Icons.Default.Palette, Color(0xFFB7BCF7), "settings/appearance"),
@@ -55,10 +56,20 @@ private val settingsCard = Color(0xFF17191E)
 private val iconTile = RoundedCornerShape(13.dp)
 
 @Composable
-internal fun SettingsScreen(onOpen: (SettingsDestination) -> Unit, bottomBarSpace: Dp = 0.dp) {
+internal fun SettingsScreen(
+    onOpen: (SettingsDestination) -> Unit,
+    showChatCategories: Boolean,
+    onShowChatCategoriesChange: (Boolean) -> Unit,
+    bottomBarSpace: Dp = 0.dp,
+) {
     SettingsPage("Settings", bottomBarSpace = bottomBarSpace) {
         SettingsGroup("Messaging") {
             DestinationLinks(onOpen, SettingsDestination.Media, SettingsDestination.Scheduled, SettingsDestination.Notifications)
+            SettingsDivider()
+            SettingsToggle(
+                "Chat categories", "Show All, Unread, and other filters in Chats",
+                Icons.Default.Category, Color(0xFF8ADCD0), showChatCategories, onShowChatCategoriesChange,
+            )
         }
         SettingsGroup("Privacy and safety") {
             DestinationLinks(onOpen, SettingsDestination.AppLock, SettingsDestination.Spam, SettingsDestination.Otp)
@@ -85,9 +96,7 @@ internal fun SettingsDetailScreen(
             SettingsDestination.Notifications -> NotificationSettings()
             SettingsDestination.AppLock -> SettingsGroup("Verification") { PinLockSetting() }
             SettingsDestination.Spam -> SpamSettings(onOpenSpam)
-            SettingsDestination.Otp -> SettingsGroup("Verification cards") {
-                SettingsNote("OTP cards disappear after 24 hours or four copies. The original SMS stays in the conversation.")
-            }
+            SettingsDestination.Otp -> OtpSettings()
             SettingsDestination.Backup -> BackupSettings()
             SettingsDestination.Recycle -> RecycleSettings(onOpenRecycleBin)
             SettingsDestination.Appearance -> SettingsGroup("Navigation") {
@@ -96,6 +105,28 @@ internal fun SettingsDetailScreen(
             }
             SettingsDestination.Scheduled, SettingsDestination.About -> Unit
         }
+    }
+}
+
+@Composable
+private fun OtpSettings() {
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences(OtpCleanupWorker.PREFS, Context.MODE_PRIVATE) }
+    var moveMessages by remember(prefs) { mutableStateOf(prefs.getBoolean(OtpCleanupWorker.MOVE_MESSAGES, false)) }
+    SettingsGroup("Verification cards") {
+        SettingsNote("OTP cards disappear after 24 hours or four copies.")
+    }
+    SettingsGroup("Original messages") {
+        SettingsToggle(
+            "Move expired OTP messages", "Move detected OTP texts to the Recycle Bin after 24 hours",
+            SettingsDestination.Otp, moveMessages,
+        ) { enabled ->
+            moveMessages = enabled
+            prefs.edit().putBoolean(OtpCleanupWorker.MOVE_MESSAGES, enabled).apply()
+            if (enabled) OtpCleanupWorker.enqueue(context)
+        }
+        SettingsDivider()
+        SettingsNote("Automatic cleanup requires the Recycle Bin and can run later if Android delays background work. For older texts, open a chat and choose Move expired OTPs from its menu.")
     }
 }
 
@@ -111,6 +142,7 @@ private fun SettingsPage(title: String, onBack: (() -> Unit)? = null, bottomBarS
                     navigationIcon = {
                         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
+                    windowInsets = WindowInsets(0, 0, 0, 0),
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
                 )
             }
@@ -200,9 +232,19 @@ private fun SettingsToggle(
     destination: SettingsDestination,
     checked: Boolean,
     onChange: (Boolean) -> Unit,
+) = SettingsToggle(title, subtitle, destination.icon, destination.accent, checked, onChange)
+
+@Composable
+private fun SettingsToggle(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accent: Color,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
 ) {
     SettingsRow(
-        title, subtitle, destination.icon, destination.accent,
+        title, subtitle, icon, accent,
         modifier = Modifier.toggleable(checked, role = Role.Switch, onValueChange = onChange),
     ) {
         Switch(checked, onCheckedChange = null, colors = SwitchDefaults.colors(

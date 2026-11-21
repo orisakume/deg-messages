@@ -1,6 +1,6 @@
 # DEG Messages Privacy Policy
 
-Last updated November 20, 2026
+Last updated November 21, 2026
 
 DEG Messages is an Android messaging app. It does not use a developer-operated backend, an account system, advertising, analytics, or tracking. The app does not send message content or contacts to the project maintainers.
 
@@ -8,6 +8,7 @@ DEG Messages is an Android messaging app. It does not use a developer-operated b
 
 - **Messages and numbers.** As your default SMS app, DEG Messages uses Android’s telephony provider to read and manage message history. Android and your carrier transmit SMS and outgoing MMS to the intended recipients. Standard carrier SMS and MMS are not end-to-end encrypted.
 - **Local processing.** Search, message categories, OTP detection, spam filtering, and message highlights are processed on your device. Quick replies, schedules, preferences, and recoverable deleted messages are stored locally. Recycle Bin entries are removed when you delete them permanently or when the configured retention period expires.
+- **Sender logos.** An offline directory bundled with the app matches supported SMS sender IDs to brand logos. This lookup uses the sender ID on the device and sends no information to a third party.
 - **Contacts and SIMs.** Optional contacts access shows saved names and photos and helps you choose recipients. Phone state access provides SIM choices.
 - **Notifications and clipboard.** Notification previews follow the app and Android settings. Copying content puts it on Android’s clipboard. When you choose Share or open a link, Android passes the data to the app you select.
 - **App lock.** The PIN or password is verified locally using a verifier backed by Android Keystore. When enabled, fingerprint verification uses Android’s biometric APIs. DEG Messages does not receive or store fingerprint templates.

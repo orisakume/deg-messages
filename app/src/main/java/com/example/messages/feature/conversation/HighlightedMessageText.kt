@@ -17,7 +17,9 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import com.example.messages.core.design.AppColors
-import com.example.messages.data.sms.HighlightKind
+import com.example.messages.core.design.MESSAGE_HIGHLIGHT_BACKGROUND
+import com.example.messages.core.design.RUPEE_HIGHLIGHT_COLOR
+import com.example.messages.core.design.highlightColor
 import com.example.messages.data.sms.MessageHighlight
 import com.example.messages.data.sms.messageHighlights
 
@@ -31,19 +33,17 @@ internal fun HighlightedMessageText(
     onHighlightClick: (MessageHighlight) -> Unit,
     onHighlightCopy: (MessageHighlight) -> Unit,
 ) {
-    val highlights = remember(body) { messageHighlights(body) }
-    val annotated = remember(body, highlights) {
+    val formatting = remember(body) { messageHighlights(body) }
+    val highlights = formatting.actions
+    val annotated = remember(body, formatting) {
         buildAnnotatedString {
             append(body)
+            formatting.rupeeMarkers.forEach { range ->
+                addStyle(SpanStyle(color = Color(RUPEE_HIGHLIGHT_COLOR), fontWeight = FontWeight.SemiBold), range.first, range.last + 1)
+            }
             highlights.forEach { span ->
-                val ink = when (span.kind) {
-                    HighlightKind.Link -> Color(0xFF9AFFBF)
-                    HighlightKind.Email -> Color(0xFFDDC7FF)
-                    HighlightKind.Phone -> Color(0xFFC3E6FF)
-                    HighlightKind.Otp -> Color(0xFFFFDC9C)
-                }
                 addStyle(
-                    SpanStyle(color = ink, background = Color(0xFF21342E),
+                    SpanStyle(color = Color(span.kind.highlightColor), background = Color(MESSAGE_HIGHLIGHT_BACKGROUND),
                         fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline),
                     span.range.first, span.range.last + 1,
                 )

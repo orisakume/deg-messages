@@ -8,6 +8,7 @@ import android.provider.Telephony
 import com.example.messages.core.database.DeletedItemDao
 import com.example.messages.core.database.DeletedItemEntity
 import com.example.messages.core.database.OtpRecordDao
+import com.example.messages.core.database.OtpRecordEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,8 +27,22 @@ class RecycleBinRepository @Inject constructor(
 
     fun isEnabled(): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
 
-    suspend fun deleteMessages(ids: List<Long>) = withContext(Dispatchers.IO) {
-        if (ids.isEmpty()) return@withContext
+    suspend fun deleteOtpSms(otp: OtpRecordEntity, requireRecovery: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val recoverable = isEnabled()
+        if (requireRecovery && !recoverable) return@withContext false
+        val uri = ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, otp.messageId)
+        val resolver = context.contentResolver
+        val message = resolver.query(uri, PROJECTION, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.toDeletedItem() else null
+        } ?: return@withContext false
+        if (message.originalMessageId != otp.messageId || message.address != otp.sender ||
+            message.date != otp.detectedAt || message.type != Telephony.Sms.MESSAGE_TYPE_INBOX
+        ) return@withContext false
+        deleteSmsRows(listOf(message), recoverable).isNotEmpty()
+    }
+
+    suspend fun deleteMessages(ids: List<Long>): List<Long> = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext emptyList()
         val rows = mutableListOf<DeletedItemEntity>()
         ids.chunked(500).forEach { chunk ->
             val marks = chunk.joinToString(",") { "?" }
@@ -40,19 +55,33 @@ class RecycleBinRepository @Inject constructor(
                 while (c.moveToNext()) rows += c.toDeletedItem()
             }
         }
-        val recoverable = isEnabled()
-        if (rows.isNotEmpty() && recoverable) dao.insert(rows)
-        val marks = ids.joinToString(",") { "?" }
-        context.contentResolver.delete(Telephony.Sms.CONTENT_URI, "${BaseColumns._ID} IN ($marks)", ids.map(Long::toString).toTypedArray())
-        if (!recoverable) otpDao.delete(ids)
+        val requestedIds = ids.toHashSet()
+        deleteSmsRows(rows.filter { it.originalMessageId in requestedIds }.distinctBy(DeletedItemEntity::originalMessageId), isEnabled())
+    }
+
+    private suspend fun deleteSmsRows(rows: List<DeletedItemEntity>, recoverable: Boolean): List<Long> {
+        if (rows.isEmpty()) return emptyList()
+        if (recoverable) dao.insert(rows)
+        val resolver = context.contentResolver
+        val deleted = rows.mapNotNull { row ->
+            val uri = ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, row.originalMessageId)
+            val selection = "${BaseColumns._ID}=? AND ${Telephony.Sms.THREAD_ID}=? AND ${Telephony.Sms.DATE}=?"
+            val args = arrayOf(row.originalMessageId.toString(), row.threadId.toString(), row.date.toString())
+            if (resolver.delete(uri, selection, args) == 1) row.originalMessageId else null
+        }
+        if (!recoverable && deleted.isNotEmpty()) otpDao.delete(deleted)
+        return deleted
     }
 
     suspend fun deleteThreads(threadIds: List<Long>) = withContext(Dispatchers.IO) {
         if (threadIds.isEmpty()) return@withContext
         val marks = threadIds.joinToString(",") { "?" }
         val ids = mutableListOf<Long>()
-        context.contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(BaseColumns._ID), "${Telephony.Sms.THREAD_ID} IN ($marks)", threadIds.map(Long::toString).toTypedArray(), null)?.use { c ->
-            while (c.moveToNext()) ids += c.getLong(0)
+        val requestedThreads = threadIds.toHashSet()
+        context.contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(BaseColumns._ID, Telephony.Sms.THREAD_ID), "${Telephony.Sms.THREAD_ID} IN ($marks)", threadIds.map(Long::toString).toTypedArray(), null)?.use { c ->
+            while (c.moveToNext()) {
+                if (c.getLong(1) in requestedThreads) ids += c.getLong(0)
+            }
         }
         deleteMessages(ids)
     }
@@ -73,7 +102,7 @@ class RecycleBinRepository @Inject constructor(
             val restored = context.contentResolver.insert(Telephony.Sms.CONTENT_URI, values)
                 ?: error("Android could not restore one or more messages.")
             val newId = ContentUris.parseId(restored)
-            otpDao.retarget(record.originalMessageId, newId)
+            otpDao.retarget(record.originalMessageId, newId, System.currentTimeMillis() - OtpRecordEntity.EXPIRATION_MS)
             dao.delete(listOf(record.id))
         }
     }

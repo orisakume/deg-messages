@@ -22,6 +22,9 @@ class OtpExpirationTest {
     fun removesOtpCardOnFourthCopy() {
         assertFalse(shouldRemoveOtpAfterCopy(3))
         assertTrue(shouldRemoveOtpAfterCopy(4))
+        val now = 1_800_000_000_000L
+        val record = otp(expiresAt = now + 1)
+        assertEquals(listOf(record), listOf(record, record.copy(copyCount = 4)).visibleAt(now))
     }
 
     private fun otp(expiresAt: Long) = OtpRecordEntity(
