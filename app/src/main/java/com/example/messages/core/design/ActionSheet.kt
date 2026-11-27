@@ -2,11 +2,13 @@ package com.example.messages.core.design
 
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,6 +19,8 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -55,12 +59,26 @@ internal data class SheetAction(
     val invoke: () -> Unit,
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+internal data class ActionAppearance(
+    val label: String,
+    val icon: ImageVector,
+    val tone: ActionTone = ActionTone.Blue,
+    val destructive: Boolean = false,
+) {
+    fun action(label: String = this.label, invoke: () -> Unit) =
+        SheetAction(label, icon, destructive, tone, invoke)
+}
+
+internal fun <T : Enum<T>> restoreActionOrder(saved: String?, defaults: List<T>): List<T> {
+    val byName = defaults.associateBy { it.name }
+    return (saved.orEmpty().split(',').mapNotNull(byName::get) + defaults).distinct()
+}
+
 @Composable
-internal fun ActionSheet(title: String, actions: List<SheetAction>, onDismiss: () -> Unit) {
+private fun actionSheetColors(): ColorScheme {
     val dark = isSystemInDarkTheme()
     val context = LocalContext.current
-    val colors = remember(context, dark) {
+    return remember(context, dark) {
         when {
             Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(context)
             Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(context)
@@ -68,6 +86,12 @@ internal fun ActionSheet(title: String, actions: List<SheetAction>, onDismiss: (
             else -> lightColorScheme()
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ActionSheet(title: String, actions: List<SheetAction>, onDismiss: () -> Unit) {
+    val colors = actionSheetColors()
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var closing by remember { mutableStateOf(false) }
@@ -75,38 +99,61 @@ internal fun ActionSheet(title: String, actions: List<SheetAction>, onDismiss: (
         ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = colors.surfaceContainerHigh) {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 20.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 12.dp, bottom = 10.dp))
-                actions.chunked(4).forEach { row ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                        row.forEach { action ->
-                            val tone = if (action.destructive) ActionTone.Rose else action.tone
-                            val iconTint = if (dark) tone.darkIcon else tone.lightIcon
-                            val iconBackground = lerp(colors.surfaceContainerHighest, iconTint, if (dark) 0.27f else 0.13f)
-                            Column(
-                                Modifier.weight(1f).clickable(enabled = !closing, role = Role.Button) {
-                                    closing = true
-                                    scope.launch {
-                                        sheet.hide()
-                                        if (!sheet.isVisible) {
-                                            onDismiss()
-                                            action.invoke()
-                                        } else closing = false
-                                    }
-                                }.padding(horizontal = 2.dp, vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Box(Modifier.size(48.dp).background(
-                                    iconBackground, CircleShape,
-                                ), contentAlignment = Alignment.Center) {
-                                    Icon(action.icon, null, modifier = Modifier.size(23.dp),
-                                        tint = iconTint)
-                                }
-                                Text(action.label, Modifier.padding(top = 6.dp), textAlign = TextAlign.Center,
-                                    style = MaterialTheme.typography.labelMedium, color = colors.onSurface)
-                            }
-                        }
-                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                ActionIconGrid(actions, enabled = !closing) { index ->
+                    closing = true
+                    scope.launch {
+                        sheet.hide()
+                        if (!sheet.isVisible) {
+                            onDismiss()
+                            actions[index].invoke()
+                        } else closing = false
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ActionIconGrid(
+    actions: List<SheetAction>,
+    selectedIndex: Int = -1,
+    enabled: Boolean = true,
+    showPreviewSurface: Boolean = false,
+    onClick: (Int) -> Unit,
+) {
+    val colors = actionSheetColors()
+    val dark = isSystemInDarkTheme()
+    Column(
+        if (showPreviewSurface) {
+            Modifier.fillMaxWidth().background(colors.surfaceContainerHigh, RoundedCornerShape(18.dp))
+        } else Modifier,
+    ) {
+        actions.chunked(4).forEachIndexed { rowIndex, row ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                row.forEachIndexed { columnIndex, action ->
+                    val index = rowIndex * 4 + columnIndex
+                    val active = index == selectedIndex
+                    val tone = if (action.destructive) ActionTone.Rose else action.tone
+                    val iconTint = if (dark) tone.darkIcon else tone.lightIcon
+                    val iconBackground = lerp(colors.surfaceContainerHighest, iconTint, if (dark) 0.27f else 0.13f)
+                    Column(
+                        Modifier.weight(1f).clickable(enabled = enabled, role = Role.Button) { onClick(index) }
+                            .then(if (active) Modifier.semantics { selected = true } else Modifier)
+                            .padding(horizontal = 2.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(Modifier.size(48.dp).background(
+                            iconBackground, CircleShape,
+                        ).then(if (active) Modifier.border(2.dp, iconTint, CircleShape) else Modifier),
+                            contentAlignment = Alignment.Center) {
+                            Icon(action.icon, null, modifier = Modifier.size(23.dp), tint = iconTint)
+                        }
+                        Text(action.label, Modifier.padding(top = 6.dp), textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.labelMedium, color = if (active) iconTint else colors.onSurface)
+                    }
+                }
+                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

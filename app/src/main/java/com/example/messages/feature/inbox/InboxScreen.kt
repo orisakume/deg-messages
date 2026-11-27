@@ -15,7 +15,6 @@ import com.example.messages.core.design.ActionSheet
 import com.example.messages.core.design.ActionTone
 import com.example.messages.core.design.OverflowIcon
 import com.example.messages.core.design.SheetAction
-import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Report
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.foundation.rememberScrollState
@@ -30,7 +29,6 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.MarkEmailRead
-import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
@@ -40,48 +38,75 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
 import android.net.Uri
+import android.database.ContentObserver
+import android.os.Handler
+import android.provider.ContactsContract
+import android.telephony.PhoneNumberUtils
+import android.telephony.TelephonyManager
+import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.example.messages.core.design.AppColors
 import com.example.messages.data.sms.SmsConversation
+import com.example.messages.data.sms.ConversationMapper
 import com.example.messages.data.sms.SmsSenderBrand
+import com.example.messages.data.sms.canReplyToSmsAddress
 import com.example.messages.data.sms.smsSenderBrand
 import java.text.DateFormat
 import java.util.Date
+import java.util.Locale
 
-private enum class InboxFilter(val label: String) { All("All"), Unread("Unread"), Personal("Personal"), Transactions("Transactions"), Promotions("Promotions"), OTP("OTP"), Spam("Spam") }
+private enum class InboxFilter(val label: String, val slot: Int? = null) {
+    All("All"), Unread("Unread"), Sim1("SIM 1", 0), Sim2("SIM 2", 1), Personal("Personal"),
+    Transactions("Transactions"), Promotions("Promotions"), OTP("OTP"), Spam("Spam")
+}
+
+private val searchPhoneNumber = Regex("""\+?[\p{Nd}().\p{Zs}\p{Pd}]+""")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InboxScreen(
+internal fun InboxScreen(
     onOpenConversation: (Long, String) -> Unit,
     onCompose: () -> Unit,
+    onComposeToNumber: (String) -> Unit,
     onOpenRecycleBin: () -> Unit,
     onOpenSpam: () -> Unit,
+    actionOrder: List<ConversationAction>,
     showCategories: Boolean = true,
     bottomBarSpace: Dp = 0.dp,
     editedThread: Pair<Long, Long>? = null,
     onEditedThreadShown: () -> Unit = {},
     viewModel: InboxViewModel = hiltViewModel(),
 ) {
-    val conversations by viewModel.conversations.collectAsStateWithLifecycle()
+    val loadedConversations by viewModel.conversations.collectAsStateWithLifecycle()
+    val conversations = loadedConversations.orEmpty()
+    val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshSubscriptions() }
     val selected = remember { mutableStateListOf<Long>() }
     var selectedFilter by rememberSaveable { mutableStateOf(InboxFilter.All) }
     val filter = if (showCategories) selectedFilter else InboxFilter.All
+    val filteredSubscriptionId = filter.slot?.let { slot -> subscriptions.firstOrNull { it.slotIndex == slot }?.subscriptionId }
     val categoryScroll = rememberScrollState()
     LaunchedEffect(showCategories, filter) {
         if (!showCategories) selectedFilter = InboxFilter.All
@@ -93,7 +118,18 @@ fun InboxScreen(
     var showAdvanced by remember { mutableStateOf(false) }
     val matches by viewModel.matches.collectAsStateWithLifecycle()
     val criteria = advanced.copy(text = search.trim())
-    LaunchedEffect(criteria, searchOpen) { viewModel.search(if (searchOpen) criteria else MessageSearch()) }
+    val context = LocalContext.current
+    val phoneCountry = remember(context) {
+        context.getSystemService(TelephonyManager::class.java)?.simCountryIso.orEmpty()
+            .ifBlank { Locale.getDefault().country }
+            .uppercase(Locale.ROOT)
+    }
+    val newRecipient = criteria.text.takeIf {
+        searchOpen && searchPhoneNumber.matches(it) && it.count(Char::isDigit) in 7..15
+    }?.let(PhoneNumberUtils::normalizeNumber)?.takeIf(::canReplyToSmsAddress)
+    LaunchedEffect(criteria, searchOpen, filteredSubscriptionId) {
+        viewModel.search(if (searchOpen) criteria else MessageSearch(), filteredSubscriptionId)
+    }
     var showArchived by rememberSaveable { mutableStateOf(false) }
     var selectionMenu by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -115,17 +151,82 @@ fun InboxScreen(
     }
 
     val advancedSpam = searchOpen && criteria.spamOnly
-    val visible = conversations.filter { conversation ->
-        (conversation.spam == (advancedSpam || filter == InboxFilter.Spam)) &&
-            (advancedSpam || filter == InboxFilter.Spam || conversation.archived == showArchived) &&
-            (filter != InboxFilter.Unread || conversation.unreadCount > 0) &&
-            (advancedSpam || filter == InboxFilter.All || filter == InboxFilter.Unread || filter == InboxFilter.Spam || conversation.category.name == filter.name) &&
-            (!searchOpen || !criteria.hasMessageFilters || matches?.contains(conversation.threadId) == true)
+    val filterBySearch = searchOpen && criteria.hasMessageFilters
+    val visible = remember(conversations, filter, filteredSubscriptionId, advancedSpam, showArchived, filterBySearch, matches) {
+        val matching = conversations.filter { conversation ->
+            (conversation.spam == (advancedSpam || filter == InboxFilter.Spam)) &&
+                (advancedSpam || filter == InboxFilter.Spam || conversation.archived == showArchived) &&
+                (filter != InboxFilter.Unread || conversation.unreadCount > 0) &&
+                (advancedSpam || filter.slot != null || filter == InboxFilter.All || filter == InboxFilter.Unread ||
+                    filter == InboxFilter.Spam || conversation.category.name == filter.name) &&
+                (!filterBySearch || matches?.contains(conversation.threadId) == true)
+        }
+        when {
+            filter.slot == null -> matching
+            filteredSubscriptionId == null -> emptyList()
+            else -> matching.mapNotNull { it.receivedOn(filteredSubscriptionId) }.sortedWith(ConversationMapper.inboxOrder)
+        }
+    }
+    val canComposeToNumber = remember(newRecipient, visible, phoneCountry) {
+        if (newRecipient == null) return@remember false
+        val internationalNumber = PhoneNumberUtils.formatNumberToE164(newRecipient, phoneCountry)
+        visible.none { conversation ->
+            val address = conversation.address.trim()
+            searchPhoneNumber.matches(address) &&
+                (PhoneNumberUtils.normalizeNumber(address) == newRecipient ||
+                    (internationalNumber != null && PhoneNumberUtils.formatNumberToE164(address, phoneCountry) == internationalNumber))
+        }
     }
     val showCategoryRow = showCategories && !showArchived && selected.isEmpty()
+    val avatarCache = rememberInboxAvatars()
+    val configuration = LocalConfiguration.current
+    val timeFormat = remember(configuration) { DateFormat.getTimeInstance(DateFormat.SHORT) }
+    val dateFormat = remember(configuration) { DateFormat.getDateInstance(DateFormat.SHORT) }
+    fun selectAllVisible() {
+        val allSelected = visible.all { it.threadId in selected }
+        selected.clear()
+        if (!allSelected) selected.addAll(visible.map { it.threadId })
+    }
+
+    fun actionsFor(threads: List<SmsConversation>): List<SheetAction> {
+        val ids = threads.map { it.threadId }
+        val pinned = threads.all { it.pinned }
+        val archived = threads.all { it.archived }
+        val muted = threads.all { it.muted }
+        val pinLabel = when {
+            !pinned -> "Pin"
+            ids.size > 1 -> "Unpin all"
+            else -> "Unpin"
+        }
+        val actions = mapOf(
+            ConversationAction.Pin to ConversationAction.Pin.appearance.action(pinLabel) {
+                ids.forEach { viewModel.setPinned(it, !pinned) }
+            },
+            ConversationAction.Archive to ConversationAction.Archive.appearance.action(if (archived) "Restore" else "Archive") {
+                ids.forEach { viewModel.setArchived(it, !archived) }
+                selected.removeAll(ids.toSet())
+            },
+            ConversationAction.Mute to ConversationAction.Mute.appearance.let { appearance ->
+                if (muted) appearance.copy(label = "Unmute", icon = Icons.Default.Notifications) else appearance
+            }.action {
+                ids.forEach { viewModel.setMuted(it, !muted) }
+            },
+            ConversationAction.Read to ConversationAction.Read.appearance.action {
+                viewModel.markThreadsRead(ids, true)
+                selected.removeAll(ids.toSet())
+            },
+            ConversationAction.Unread to ConversationAction.Unread.appearance.action {
+                viewModel.markThreadsRead(ids, false)
+                selected.removeAll(ids.toSet())
+            },
+            ConversationAction.Delete to ConversationAction.Delete.appearance.action { pendingDelete = ids },
+        )
+        return actionOrder.map(actions::getValue)
+    }
+
     val hasCategoryHeader = showCategoryRow && filter == InboxFilter.All && visible.isNotEmpty()
     val listState = key(filter, showArchived) { rememberLazyListState() }
-    val editedConversation = conversations.firstOrNull { editedThread == (it.threadId to it.date) }
+    val editedConversation = editedThread?.let { (id, date) -> conversations.firstOrNull { it.threadId == id && it.date == date } }
     val editedRow = editedConversation?.let { edited -> visible.indexOfFirst { it.threadId == edited.threadId } }
     LaunchedEffect(editedConversation, editedRow, hasCategoryHeader, listState) {
         val conversation = editedConversation ?: return@LaunchedEffect
@@ -160,20 +261,10 @@ fun InboxScreen(
                 Surface(modifier = Modifier.padding(bottom = bottomBarSpace), color = AppColors.Surface) {
                     Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
                         Button(onClick = { selectionMenu = true }) { Text("Conversation actions") }
-                        if (selectionMenu && selected.isNotEmpty()) ActionSheet("Conversation actions", listOf(
-                            SheetAction(if (selected.size == visible.size) "Deselect all" else "Select all", Icons.Default.SelectAll, tone = ActionTone.Blue) {
-                                val allSelected = selected.size == visible.size
-                                selected.clear()
-                                if (!allSelected) selected.addAll(visible.map { it.threadId })
-                            },
-                            SheetAction("Read", Icons.Default.MarkEmailRead, tone = ActionTone.Sage) { viewModel.markThreadsRead(selected.toList(), true); selected.clear() },
-                            SheetAction("Unread", Icons.Default.MarkEmailUnread, tone = ActionTone.Lilac) { viewModel.markThreadsRead(selected.toList(), false); selected.clear() },
-                            SheetAction(if (showArchived) "Restore" else "Archive", Icons.Default.Archive, tone = ActionTone.Teal) {
-                                selected.toList().forEach { viewModel.setArchived(it, !showArchived) }
-                                selected.clear()
-                            },
-                            SheetAction("Delete", Icons.Default.DeleteOutline, destructive = true) { pendingDelete = selected.toList() },
-                        )) { selectionMenu = false }
+                        val selectedThreads = conversations.filter { it.threadId in selected }
+                        if (selectionMenu && selectedThreads.isNotEmpty()) {
+                            ActionSheet("Conversation actions", actionsFor(selectedThreads)) { selectionMenu = false }
+                        }
                     }
                 }
             }
@@ -195,6 +286,9 @@ fun InboxScreen(
                 },
                 actions = {
                     if (selected.isNotEmpty()) {
+                        IconButton(onClick = ::selectAllVisible) {
+                            Icon(Icons.Default.SelectAll, contentDescription = if (visible.all { it.threadId in selected }) "Deselect all" else "Select all")
+                        }
                     } else {
                         IconButton(onClick = { if (searchOpen) closeSearch() else searchOpen = true }) {
                             Icon(Icons.Default.Search, contentDescription = "Search messages")
@@ -206,14 +300,37 @@ fun InboxScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.Background),
             )
             if (searchOpen && selected.isEmpty()) {
+                val searchFocus = remember { FocusRequester() }
+                val keyboard = LocalSoftwareKeyboardController.current
+                LaunchedEffect(Unit) {
+                    searchFocus.requestFocus()
+                    keyboard?.show()
+                }
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                        .focusRequester(searchFocus),
                     singleLine = true,
                     placeholder = { Text(when (advanced.field) { SearchField.Any -> "Search messages or people"; SearchField.Contact -> "Contact name or number"; SearchField.Message -> "Search message text" }) },
                     trailingIcon = { TextButton(onClick = { search = "" }) { Text("Clear") } },
                 )
+                if (canComposeToNumber && newRecipient != null) {
+                    val contactName by key(newRecipient) {
+                        produceState("") { value = viewModel.contactName(newRecipient) }
+                    }
+                    FilledTonalButton(
+                        onClick = { onComposeToNumber(newRecipient) },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("New message to ${contactName.ifBlank { newRecipient }}")
+                            if (contactName.isNotBlank() && contactName != newRecipient) {
+                                Text(newRecipient, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
                 TextButton(onClick = { showAdvanced = true }, modifier = Modifier.padding(horizontal = 12.dp)) {
                     Text(if (advanced.active || advanced.field != SearchField.Any) "Search filters · On" else "Search filters")
                 }
@@ -221,20 +338,28 @@ fun InboxScreen(
             if (showCategoryRow && (filter != InboxFilter.All || visible.isEmpty())) {
                 InboxCategories(filter, categoryScroll) { selectedFilter = it }
             }
-            if (visible.isEmpty()) {
+            if (loadedConversations == null) {
+                Spacer(Modifier.fillMaxSize())
+            } else if (visible.isEmpty()) {
                 Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         when {
                             searchOpen && criteria.active -> "No matching messages"
                             showArchived -> "No archived conversations"
                             filter == InboxFilter.Unread -> "No unread conversations"
+                            filter.slot != null -> "No messages received on ${filter.label}"
                             else -> "No messages yet"
                         },
                         style = MaterialTheme.typography.titleLarge,
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        if (filter == InboxFilter.Unread && search.isBlank()) "You’re all caught up. Read messages remain in All." else "SMS conversations from this device will appear here.",
+                        when {
+                            filter.slot != null && filteredSubscriptionId == null -> "${filter.label} is currently unavailable. See your full history in All."
+                            filter.slot != null -> "Incoming messages for this SIM will appear here."
+                            filter == InboxFilter.Unread && search.isBlank() -> "You’re all caught up. Read messages remain in All."
+                            else -> "SMS conversations from this device will appear here."
+                        },
                         color = AppColors.TextSecondary,
                     )
                 }
@@ -246,7 +371,7 @@ fun InboxScreen(
                     if (hasCategoryHeader) item(key = "inbox_categories") {
                         InboxCategories(filter, categoryScroll) { selectedFilter = it }
                     }
-                    items(visible, key = SmsConversation::threadId) { conversation ->
+                    items(visible, key = SmsConversation::threadId, contentType = { "conversation" }) { conversation ->
                         val selectedNow = conversation.threadId in selected
                         val swipeState = rememberSwipeToDismissBoxState()
                         LaunchedEffect(swipeState.currentValue) {
@@ -282,6 +407,12 @@ fun InboxScreen(
                                 ConversationRow(
                                     conversation = conversation,
                                     selected = selectedNow,
+                                    timestamp = if (android.text.format.DateUtils.isToday(conversation.date)) {
+                                        timeFormat.format(Date(conversation.date))
+                                    } else {
+                                        dateFormat.format(Date(conversation.date))
+                                    },
+                                    avatarCache = avatarCache,
                                     onClick = {
                                         if (selected.isNotEmpty()) {
                                             if (conversation.threadId in selected) selected.remove(conversation.threadId) else selected.add(conversation.threadId)
@@ -290,11 +421,7 @@ fun InboxScreen(
                                     onLongClick = {
                                         if (conversation.threadId in selected) selected.remove(conversation.threadId) else selected.add(conversation.threadId)
                                     },
-                                    onPin = { viewModel.setPinned(conversation.threadId, !conversation.pinned) },
-                                    onArchive = { viewModel.setArchived(conversation.threadId, !conversation.archived) },
-                                    onMute = { viewModel.setMuted(conversation.threadId, !conversation.muted) },
-                                    onRead = { viewModel.markThreadsRead(listOf(conversation.threadId), conversation.unreadCount > 0) },
-                                    onDelete = { pendingDelete = listOf(conversation.threadId) },
+                                    actions = { actionsFor(listOf(conversation)) },
                                 )
                             }
                         }
@@ -359,13 +486,11 @@ private fun InboxCategories(filter: InboxFilter, scrollState: ScrollState, onSel
 private fun ConversationRow(
     conversation: SmsConversation,
     selected: Boolean,
+    timestamp: String,
+    avatarCache: LruCache<String, ImageBitmap>?,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
-    onPin: () -> Unit,
-    onArchive: () -> Unit,
-    onMute: () -> Unit,
-    onRead: () -> Unit,
-    onDelete: () -> Unit,
+    actions: () -> List<SheetAction>,
 ) {
     var menu by remember { mutableStateOf(false) }
     val brand = remember(conversation.address) { smsSenderBrand(conversation.address) }
@@ -375,7 +500,6 @@ private fun ConversationRow(
             modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
                 .padding(horizontal = 12.dp, vertical = 4.dp)
                 .clip(RoundedCornerShape(18.dp))
-                .then(if (selected) Modifier else Modifier)
                 .padding(horizontal = 8.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -387,7 +511,7 @@ private fun ConversationRow(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     if (selected) Icon(Icons.Default.Check, contentDescription = "Selected", tint = AppColors.AccentGreen)
-                    else ContactAvatar(conversation.contactPhotoUri, title, brand)
+                    else ContactAvatar(conversation.contactPhotoUri, title, brand, avatarCache)
                 }
             }
             Spacer(Modifier.width(12.dp))
@@ -395,7 +519,7 @@ private fun ConversationRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, fontWeight = if (conversation.unreadCount > 0) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (conversation.pinned) Icon(Icons.Default.PushPin, contentDescription = "Pinned", tint = AppColors.AccentGreen, modifier = Modifier.size(16.dp))
-                    Text(formatConversationTime(conversation.date), color = AppColors.TextSecondary, style = MaterialTheme.typography.labelSmall)
+                    Text(timestamp, color = AppColors.TextSecondary, style = MaterialTheme.typography.labelSmall)
                 }
                 if (brand != null && title != conversation.address) {
                     Text(conversation.address, color = AppColors.TextSecondary, style = MaterialTheme.typography.labelSmall,
@@ -414,15 +538,7 @@ private fun ConversationRow(
                         IconButton(onClick = { menu = true }, modifier = Modifier.size(30.dp)) {
                             OverflowIcon("Conversation actions", tint = AppColors.TextSecondary)
                         }
-                        if (menu) ActionSheet("Conversation actions", listOf(
-                            SheetAction(if (conversation.pinned) "Unpin" else "Pin", Icons.Default.PushPin, tone = ActionTone.Amber, invoke = onPin),
-                            SheetAction(if (conversation.archived) "Restore" else "Archive", Icons.Default.Archive, tone = ActionTone.Teal, invoke = onArchive),
-                            SheetAction(if (conversation.muted) "Unmute" else "Mute",
-                                if (conversation.muted) Icons.Default.Notifications else Icons.Default.NotificationsOff, tone = ActionTone.Amber, invoke = onMute),
-                            SheetAction(if (conversation.unreadCount > 0) "Mark read" else "Mark unread",
-                                Icons.Default.MarkEmailRead, tone = ActionTone.Sage, invoke = onRead),
-                            SheetAction("Delete", Icons.Default.DeleteOutline, destructive = true, invoke = onDelete),
-                        )) { menu = false }
+                        if (menu) ActionSheet("Conversation actions", actions()) { menu = false }
                     }
                 }
             }
@@ -432,27 +548,41 @@ private fun ConversationRow(
 }
 
 @Composable
-internal fun ContactAvatar(photoUri: String, displayName: String, brand: SmsSenderBrand? = null) {
+internal fun ContactAvatar(
+    photoUri: String,
+    displayName: String,
+    brand: SmsSenderBrand? = null,
+    cache: LruCache<String, ImageBitmap>? = null,
+) {
     val context = LocalContext.current
-    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, photoUri) {
-        value = if (photoUri.isBlank()) null else withContext(Dispatchers.IO) {
-            try {
-                android.graphics.ImageDecoder.decodeBitmap(
-                    android.graphics.ImageDecoder.createSource(context.contentResolver, Uri.parse(photoUri)),
-                ) { decoder, info, _ ->
-                    val width = info.size.width
-                    val height = info.size.height
-                    val scale = minOf(1.0, 144.0 / maxOf(width, height))
-                    decoder.setTargetSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
+    val bitmap by key(photoUri, cache) {
+        produceState<ImageBitmap?>(cache?.get(photoUri)) {
+            if (photoUri.isBlank() || value != null) return@produceState
+            value = withContext(Dispatchers.IO) {
+                try {
+                    android.graphics.ImageDecoder.decodeBitmap(
+                        android.graphics.ImageDecoder.createSource(context.contentResolver, Uri.parse(photoUri)),
+                    ) { decoder, info, _ ->
+                        val width = info.size.width
+                        val height = info.size.height
+                        val scale = minOf(1.0, 144.0 / maxOf(width, height))
+                        decoder.setTargetSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
+                    }.asImageBitmap()
+                } catch (_: java.io.IOException) {
+                    null
+                } catch (_: SecurityException) {
+                    null
+                } catch (_: IllegalArgumentException) {
+                    null
                 }
-            } catch (_: Exception) {
-                null
             }
+            value?.let { cache?.put(photoUri, it) }
         }
     }
-    if (bitmap != null) {
+    val photo = bitmap
+    if (photo != null) {
         Image(
-            bitmap = bitmap!!.asImageBitmap(),
+            bitmap = photo,
             contentDescription = "$displayName profile photo",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().clip(CircleShape),
@@ -469,12 +599,25 @@ internal fun ContactAvatar(photoUri: String, displayName: String, brand: SmsSend
     }
 }
 
-internal fun formatConversationTime(timestamp: Long): String {
-    val date = Date(timestamp)
-    val now = System.currentTimeMillis()
-    return when {
-        android.text.format.DateUtils.isToday(timestamp) -> DateFormat.getTimeInstance(DateFormat.SHORT).format(date)
-        now - timestamp < 7L * 24 * 60 * 60 * 1000 -> DateFormat.getDateInstance(DateFormat.SHORT).format(date)
-        else -> DateFormat.getDateInstance(DateFormat.SHORT).format(date)
+@Composable
+private fun rememberInboxAvatars(): LruCache<String, ImageBitmap>? {
+    val context = LocalContext.current
+    var cache by remember(context) { mutableStateOf<LruCache<String, ImageBitmap>?>(null) }
+    DisposableEffect(context) {
+        val resolver = context.contentResolver
+        val observer = object : ContentObserver(Handler(context.mainLooper)) {
+            override fun onChange(selfChange: Boolean) {
+                cache = LruCache(64)
+            }
+        }
+        val registered = try {
+            resolver.registerContentObserver(ContactsContract.Contacts.CONTENT_URI, true, observer)
+            cache = LruCache(64)
+            true
+        } catch (_: SecurityException) {
+            false
+        }
+        onDispose { if (registered) resolver.unregisterContentObserver(observer) }
     }
+    return cache
 }

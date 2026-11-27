@@ -2,13 +2,20 @@
 
 DEG Messages is a native Android messaging app built with Kotlin and Jetpack Compose. It works as Android’s default SMS app and keeps message processing on your device.
 
-## What’s new in v2.3.0
+## What’s new in v2.3.3
 
-- **Reply layout.** The composer stays above the keyboard while you type.
-- **Single-message deletion.** Delete a selected SMS in a chat or on the OTP tab. Back brings the remaining conversation into view even if its category changed.
-- **Offline sender logos.** A bundled directory matches 648 sender headers across 25 brands, including Zepto, Amazon, India Post, and Flipkart. The original sender ID remains visible. [Brand directory and artwork sources](docs/BRAND_LOGOS.md)
-- **OTP and message highlights.** Recognize 4-, 6-, and 8-digit OTPs, select and copy part of a message, and highlight links, phone numbers, email addresses, and rupee amounts in chats and supported notification previews.
-- **Inbox and settings refinements.** Back returns from Archived to Chats and from a category to All. Chat categories can be turned off, and settings screens use less space above their content.
+- **Conversation layout and SIM controls.** The composer follows the keyboard, long phone numbers can wrap, and the carrier appears below the SIM icon. Tap the SIM icon to switch between active subscriptions. Chats can also be filtered by incoming SIM.
+- **Action menus.** Reorder conversation and message actions independently in Settings.
+- **Security hardening.** Notification taps use a private entry point, file pickers require Android access grants, backup imports and media have validation limits, and dedicated OTP copy actions use Android’s sensitive clipboard flag.
+- **Offline sender logos and highlights.** Chats use bundled sender artwork and highlight OTPs, links, numbers, email addresses, and rupee amounts. [Brand directory and artwork sources](docs/BRAND_LOGOS.md)
+
+## Screenshots
+
+Chats, Conversation, and OTPs were captured from the 2.3.3 app on an Android emulator with synthetic senders and messages. Settings was captured on a Samsung Galaxy A55.
+
+| Chats | Conversation | OTPs | Settings |
+| --- | --- | --- | --- |
+| <img src="docs/screenshots/01-inbox.png" alt="Chats with synthetic conversations" width="210"> | <img src="docs/screenshots/02-conversation.png" alt="Conversation with a highlighted example link" width="210"> | <img src="docs/screenshots/03-otps.png" alt="OTP screen with a synthetic verification code" width="210"> | <img src="docs/screenshots/04-settings.png" alt="DEG Messages settings" width="210"> |
 
 ## Messaging features
 
@@ -28,13 +35,13 @@ Choose the universal APK if you’re unsure which CPU your device uses. Android 
 
 | Download | Device architecture |
 | --- | --- |
-| [Universal](https://github.com/orisakume/deg-messages/releases/download/v2.3.0/DEG-Messages-v2.3.0-universal.apk) | All supported architectures |
-| [ARM64](https://github.com/orisakume/deg-messages/releases/download/v2.3.0/DEG-Messages-v2.3.0-arm64-v8a.apk) | 64-bit ARM |
-| [ARMv7](https://github.com/orisakume/deg-messages/releases/download/v2.3.0/DEG-Messages-v2.3.0-armeabi-v7a.apk) | 32-bit ARM |
-| [x86_64](https://github.com/orisakume/deg-messages/releases/download/v2.3.0/DEG-Messages-v2.3.0-x86_64.apk) | 64-bit Intel/AMD |
-| [x86](https://github.com/orisakume/deg-messages/releases/download/v2.3.0/DEG-Messages-v2.3.0-x86.apk) | 32-bit Intel/AMD |
+| [Universal](https://github.com/orisakume/deg-messages/releases/download/v2.3.3/DEG-Messages-v2.3.3-universal.apk) | All supported architectures |
+| [ARM64](https://github.com/orisakume/deg-messages/releases/download/v2.3.3/DEG-Messages-v2.3.3-arm64-v8a.apk) | 64-bit ARM |
+| [ARMv7](https://github.com/orisakume/deg-messages/releases/download/v2.3.3/DEG-Messages-v2.3.3-armeabi-v7a.apk) | 32-bit ARM |
+| [x86_64](https://github.com/orisakume/deg-messages/releases/download/v2.3.3/DEG-Messages-v2.3.3-x86_64.apk) | 64-bit Intel/AMD |
+| [x86](https://github.com/orisakume/deg-messages/releases/download/v2.3.3/DEG-Messages-v2.3.3-x86.apk) | 32-bit Intel/AMD |
 
-Compare your APK’s SHA-256 hash against the [published checksums](https://github.com/orisakume/deg-messages/releases/download/v2.3.0/SHA256SUMS.txt). Previous versions are available in [GitHub Releases](https://github.com/orisakume/deg-messages/releases).
+Compare your APK’s SHA-256 hash against the [published checksums](https://github.com/orisakume/deg-messages/releases/download/v2.3.3/SHA256SUMS.txt). Previous versions are available in [GitHub Releases](https://github.com/orisakume/deg-messages/releases).
 
 ## Privacy and security
 
@@ -48,13 +55,13 @@ See [Privacy Policy](PRIVACY_POLICY.md) for data and permission details, and [Se
 
 ## Build from source
 
-Use Android Studio or JDK 17 and Android SDK 37. The app targets API 37 and supports installation from API 29. A telephony-capable device and active SIM are required for carrier messaging. See the [Android compatibility notes](docs/ANDROID_COMPATIBILITY.md).
+Use Android Studio or JDK 17 with Android SDK 37, NDK 28.2.13676358, and CMake 3.22.1. The app targets API 37 and supports installation from API 29. A telephony-capable device and active SIM are required for carrier messaging. See the [Android compatibility notes](docs/ANDROID_COMPATIBILITY.md).
 
 ```powershell
 .\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
-The universal debug APK is at `app/build/outputs/apk/debug/app-universal-debug.apk`. GitHub APKs use `com.example.messages`. The Play bundle uses `io.github.orisakume.degmessages`. Both use version code `6`. See [Release signing](docs/RELEASE_SIGNING.md) for signing and local release builds.
+The universal debug APK is at `app/build/outputs/apk/debug/app-universal-debug.apk`. GitHub APKs use `com.example.messages`. The Play bundle uses `io.github.orisakume.degmessages`. Version 2.3.3 uses version code `9` for both. See [Release signing](docs/RELEASE_SIGNING.md) for signing and local release builds.
 
 See the [test matrix](docs/TEST_MATRIX.md) for verified flows and coverage limits.
 

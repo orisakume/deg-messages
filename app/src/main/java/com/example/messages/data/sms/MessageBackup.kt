@@ -2,14 +2,17 @@ package com.example.messages.data.sms
 
 import android.content.ContentProviderOperation
 import android.content.Context
+import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
 import android.util.Base64
 import com.example.messages.data.mms.MmsStore
 import com.example.messages.data.mms.MmsAttachment
+import com.example.messages.data.mms.hasSafeMediaDimensions
 import java.security.MessageDigest
 import android.provider.Telephony.Sms
 import com.example.messages.platform.DefaultSmsRole
+import com.example.messages.platform.canAccessPickedDocument
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -37,6 +40,9 @@ internal class MessageBackup(private val context: Context) {
 
     suspend fun write(uri: Uri): Int = withContext(Dispatchers.IO) {
         check(DefaultSmsRole.isHeld(context)) { "Set DEG Messages as the default SMS app first." }
+        check(context.canAccessPickedDocument(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) {
+            "Could not access the selected backup destination."
+        }
         val json = JSONArray()
         val rows = readProvider()
         rows.forEach { entry ->
@@ -53,8 +59,10 @@ internal class MessageBackup(private val context: Context) {
                 .put("failed", photo.failed).put("mime", photo.image.mime)
                 .put("image", Base64.encodeToString(photo.image.bytes, Base64.NO_WRAP)))
         }
-        val bytes = JSONObject().put("format", "deg-sms-backup").put("version", 2).put("messages", json)
-            .put("photos", photos).toString().toByteArray(Charsets.UTF_8)
+        val document = JSONObject().put("format", "deg-sms-backup").put("version", 2).put("messages", json)
+            .put("photos", photos).toString()
+        checkBackupJsonDepth(document)
+        val bytes = document.toByteArray(Charsets.UTF_8)
         require(bytes.size <= maxBytes) { "This message backup exceeds the 32 MiB limit." }
         val output = resolver.openOutputStream(uri, "wt") ?: error("Could not open the backup destination.")
         output.use { it.write(bytes) }
@@ -63,6 +71,9 @@ internal class MessageBackup(private val context: Context) {
 
     suspend fun restore(uri: Uri): Int = withContext(Dispatchers.IO) {
         check(DefaultSmsRole.isHeld(context)) { "Set DEG Messages as the default SMS app first." }
+        check(context.canAccessPickedDocument(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+            "Could not access the selected backup file."
+        }
         val data = checkNotNull(resolver.openInputStream(uri)) { "Could not open the backup file." }.use { stream ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(8192)
@@ -72,7 +83,7 @@ internal class MessageBackup(private val context: Context) {
                 require(output.size() + count <= maxBytes) { "This message backup exceeds the 32 MiB limit." }
                 output.write(buffer, 0, count)
             }
-            JSONObject(output.toString("UTF-8"))
+            JSONObject(output.toString("UTF-8").also(::checkBackupJsonDepth))
         }
         require(data.optString("format") == "deg-sms-backup" && data.optInt("version") in 1..2) { "Choose a DEG Messages backup." }
         val json = data.getJSONArray("messages")
@@ -88,13 +99,17 @@ internal class MessageBackup(private val context: Context) {
             val body = row.getString("body")
             val date = row.getLong("date")
             val mime = row.getString("mime")
-            val bytes = Base64.decode(row.getString("image"), Base64.NO_WRAP)
+            val encoded = row.getString("image")
+            require(encoded.length <= (maxImageBytes + 2) / 3 * 4) { "A photo in the backup exceeds 10 MiB." }
+            val bytes = Base64.decode(encoded, Base64.NO_WRAP)
             require(canReplyToSmsAddress(address) && address.length <= 512 && body.length <= 45_000 && date >= 0 && mime in pictures && bytes.isNotEmpty() && bytes.size <= maxImageBytes) {
                 "This backup contains an invalid photo message."
             }
             val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            require(bounds.outMimeType == mime && bounds.outWidth > 0 && bounds.outHeight > 0) { "A backup image is damaged." }
+            require(bounds.outMimeType == mime && hasSafeMediaDimensions(bounds.outWidth, bounds.outHeight)) {
+                "A backup image is damaged or too large."
+            }
             Photo(address, body, date, row.getBoolean("failed"), MmsAttachment(mime, bytes))
         }
         val existingPhotos = if (photoEntries.isEmpty()) mutableSetOf() else settledPhotos().mapNotNull {

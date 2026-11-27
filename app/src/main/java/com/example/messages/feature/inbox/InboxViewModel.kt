@@ -13,19 +13,26 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @HiltViewModel
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
 class InboxViewModel @Inject constructor(private val repository: SmsRepository) : ViewModel() {
     val recycleBinEnabled: Boolean get() = repository.isRecycleBinEnabled()
-    val conversations: StateFlow<List<SmsConversation>> = repository.observeConversations()
+    val conversations: StateFlow<List<SmsConversation>?> = repository.observeConversations()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val subscriptionRefresh = MutableStateFlow(0L)
+    internal val subscriptions = subscriptionRefresh.flatMapLatest { repository.observeSubscriptions() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val query = MutableStateFlow(MessageSearch())
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
-    val matches = query.debounce(200).flatMapLatest(repository::observeSearch)
+    private val query = MutableStateFlow<Pair<MessageSearch, Int?>>(MessageSearch() to null)
+    val matches = query.debounce(200).flatMapLatest { (search, subscription) -> repository.observeSearch(search, subscription) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-    internal fun search(value: MessageSearch) { query.value = value }
+    internal fun search(value: MessageSearch, subscriptionId: Int?) { query.value = value to subscriptionId }
+    internal fun refreshSubscriptions() { subscriptionRefresh.update { it + 1 } }
+    internal suspend fun contactName(number: String): String = repository.contactDetails(number).displayName
 
     fun markThreadsRead(threadIds: List<Long>, read: Boolean) = viewModelScope.launch {
         repository.markThreadsRead(threadIds, read)

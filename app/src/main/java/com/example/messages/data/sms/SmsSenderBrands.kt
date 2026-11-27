@@ -60,6 +60,7 @@ private val brandsByHeader: Map<String, SmsSenderBrand> by lazy {
             ICBANK ICIBNK ICICBK ICICIB ICICIH ICICIK ICICIL ICICTC ICIEMP ICIOTP ISECLD ISRVCE
         """)
         register("India Post", R.drawable.brand_indiapost, "APPOST DOPBNK DOPCBS DOPPLI INPOST")
+        register("Indane", R.drawable.brand_indane, "INDANE")
         register("IndiGo", R.drawable.brand_indigo, "INDIGO INDOFF KACHNG")
         register("Jio", R.drawable.brand_jio, """
             ISOCOP JIOAPP JIOARW JIOBAL JIODLT JIOECT JIOENG JIOENT JIOFBR JIOFCE JIOFON JIOGMS JIOGSA

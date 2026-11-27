@@ -34,8 +34,15 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ComposeScreen(onBack: () -> Unit, onConversation: (Long, String) -> Unit, forwardedText: String = "", forwardedImage: String? = null, viewModel: ComposeViewModel = hiltViewModel()) {
-    var recipient by rememberSaveable { mutableStateOf("") }
+fun ComposeScreen(
+    onBack: () -> Unit,
+    onConversation: (Long, String) -> Unit,
+    forwardedText: String = "",
+    forwardedImage: String? = null,
+    initialRecipient: String = "",
+    viewModel: ComposeViewModel = hiltViewModel(),
+) {
+    var recipient by rememberSaveable { mutableStateOf(initialRecipient) }
     var body by rememberSaveable { mutableStateOf(forwardedText) }
     var image by rememberSaveable { mutableStateOf(forwardedImage) }
     var scheduling by remember { mutableStateOf(false) }

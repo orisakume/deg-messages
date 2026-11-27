@@ -8,26 +8,65 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SimCard
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.core.content.ContextCompat
 import com.example.messages.data.sms.SimOption
+import com.example.messages.core.design.AppColors
 import kotlinx.coroutines.launch
 
 internal val SimOptionSaver = listSaver<SimOption?, Any>(
     save = { it?.let { option -> listOf(option.subscriptionId, option.displayName, option.slotIndex) }.orEmpty() },
     restore = { SimOption(it[0] as Int, it[1] as String, it[2] as Int) },
 )
+
+@Composable
+internal fun ConversationSimIndicator(selection: ConversationSimSelection, enabled: Boolean, onClick: () -> Unit) {
+    val sim = selection.selected
+    val needsPermission = selection.permissionGranted == false
+    val label = when {
+        sim != null -> sim.displayName
+        needsPermission -> "Allow SIM"
+        selection.permissionGranted == null -> "SIM"
+        selection.rememberedId != null -> "SIM unavailable"
+        selection.active.isNotEmpty() -> "Choose SIM"
+        else -> "No SIM"
+    }
+    val action = when {
+        needsPermission -> "Allow phone access"
+        selection.canSwitch -> "Switch SIM"
+        else -> null
+    }
+    val description = if (sim == null) label else "SIM ${sim.slotIndex + 1}, $label"
+    val interaction = if (action != null) Modifier.clickable(enabled = enabled, onClickLabel = action, role = Role.Button, onClick = onClick) else Modifier
+    Column(
+        Modifier.width(66.dp).heightIn(min = 48.dp).then(interaction)
+            .semantics(mergeDescendants = true) { contentDescription = description }.padding(horizontal = 2.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(Icons.Default.SimCard, contentDescription = null, tint = AppColors.AccentGreen, modifier = Modifier.size(22.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = AppColors.TextSecondary,
+            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
 
 @Composable
 fun SimSelector(

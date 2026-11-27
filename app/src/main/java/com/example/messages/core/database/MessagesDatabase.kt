@@ -156,6 +156,9 @@ interface ConversationMetadataDao {
     fun observeAll(): Flow<List<ConversationMetadataEntity>>
 
     @Query("SELECT * FROM conversation_metadata WHERE threadId = :threadId")
+    fun observe(threadId: Long): Flow<ConversationMetadataEntity?>
+
+    @Query("SELECT * FROM conversation_metadata WHERE threadId = :threadId")
     suspend fun get(threadId: Long): ConversationMetadataEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

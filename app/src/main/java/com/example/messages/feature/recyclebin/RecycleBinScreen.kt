@@ -25,7 +25,8 @@ import java.util.Date
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecycleBinScreen(onBack: () -> Unit, viewModel: RecycleBinViewModel = hiltViewModel()) {
-    val items by viewModel.items.collectAsStateWithLifecycle()
+    val loadedItems by viewModel.items.collectAsStateWithLifecycle()
+    val items = loadedItems.orEmpty()
     val selected = remember { mutableStateListOf<Long>() }
     var confirmEmpty by remember { mutableStateOf(false) }
     var confirmPermanent by remember { mutableStateOf(false) }
@@ -45,6 +46,7 @@ fun RecycleBinScreen(onBack: () -> Unit, viewModel: RecycleBinViewModel = hiltVi
         )
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            if (loadedItems == null) return@Column
             SectionInfoCard(
                 icon = Icons.Default.Restore,
                 accent = AppColors.AccentGreen,

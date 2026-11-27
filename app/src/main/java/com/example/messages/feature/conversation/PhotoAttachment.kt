@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -28,16 +29,25 @@ import com.example.messages.core.design.AppColors
 import com.example.messages.core.design.ActionDropdown
 import com.example.messages.core.design.ActionTone
 import com.example.messages.core.design.SheetAction
-import kotlinx.coroutines.launch
+import com.example.messages.data.mms.hasSafeMediaDimensions
+import com.example.messages.platform.canAccessPickedDocument
+import com.example.messages.platform.copyAttachmentTo
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
 internal fun AddAttachmentButton(enabled: Boolean, onSelected: (Uri) -> Unit) {
+    val context = LocalContext.current
     var choosing by remember { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) onSelected(uri)
+        if (uri != null) {
+            if (context.canAccessPickedDocument(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+                onSelected(uri)
+            } else {
+                Toast.makeText(context, "Could not access the selected media.", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     Box {
         IconButton(enabled = enabled, onClick = { choosing = true }) {
@@ -54,7 +64,9 @@ internal fun AddAttachmentButton(enabled: Boolean, onSelected: (Uri) -> Unit) {
 internal fun AttachedMedia(uri: Uri, onRemove: () -> Unit) {
     val context = LocalContext.current
     val video by produceState(false, uri) {
-        value = withContext(Dispatchers.IO) { context.contentResolver.getType(uri)?.startsWith("video/") == true }
+        value = withContext(Dispatchers.IO) {
+            runCatching { context.contentResolver.getType(uri)?.startsWith("video/") == true }.getOrDefault(false)
+        }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         MessageImage(uri, Modifier.size(74.dp), if (video) "Attached video" else "Attached image", 180, video)
@@ -75,6 +87,7 @@ internal fun MessageImage(uri: Uri, modifier: Modifier, description: String, max
                         metadata.setDataSource(context, uri)
                         val width = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: maxEdge
                         val height = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: maxEdge
+                        require(hasSafeMediaDimensions(width, height))
                         val scale = minOf(1.0, maxEdge.toDouble() / maxOf(width, height, 1))
                         metadata.getScaledFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                             (width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
@@ -82,6 +95,7 @@ internal fun MessageImage(uri: Uri, modifier: Modifier, description: String, max
                 } else ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
                     val width = info.size.width
                     val height = info.size.height
+                    require(hasSafeMediaDimensions(width, height))
                     val scale = minOf(1.0, maxEdge.toDouble() / maxOf(width, height))
                     decoder.setTargetSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
                 }
@@ -107,7 +121,7 @@ internal suspend fun mediaIntent(context: Context, source: Uri, mime: String, te
         val file = File.createTempFile("attachment-", ".$suffix", directory)
         try {
             val input = context.contentResolver.openInputStream(source) ?: error("Could not open this attachment.")
-            input.use { stream -> file.outputStream().use { stream.copyTo(it) } }
+            input.use { stream -> file.outputStream().use { stream.copyAttachmentTo(it) } }
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.mms", file)
             val intent = if (view) Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
                 else Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri).putExtra(Intent.EXTRA_TEXT, text)

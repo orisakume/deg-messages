@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
 import time
@@ -10,14 +11,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APK = ROOT / "release" / "DEG-Messages-v1.0.0-universal.apk"
 OUTPUT = ROOT / "docs" / "screenshots"
 PACKAGE = "com.example.messages"
+ADB = ["adb"]
 
 
 def command(*args: str, timeout: int = 30, check: bool = True) -> str:
     result = subprocess.run(
-        ["adb", *args],
+        [*ADB, *args],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -57,9 +58,9 @@ def insert_contact(first: str, last: str, number: str) -> None:
 
 
 def dump_hierarchy() -> ET.Element:
-    command("shell", "uiautomator", "dump", "/sdcard/window.xml", timeout=30)
+    command("shell", "uiautomator", "dump", "/data/local/tmp/deg-demo-ui.xml", timeout=30)
     xml = subprocess.run(
-        ["adb", "exec-out", "cat", "/sdcard/window.xml"],
+        [*ADB, "exec-out", "cat", "/data/local/tmp/deg-demo-ui.xml"],
         capture_output=True,
         timeout=15,
         check=True,
@@ -105,7 +106,7 @@ def tap_text(fragment: str) -> None:
 
 def capture(name: str) -> None:
     time.sleep(2)
-    result = subprocess.run(["adb", "exec-out", "screencap", "-p"], capture_output=True, timeout=30, check=True)
+    result = subprocess.run([*ADB, "exec-out", "screencap", "-p"], capture_output=True, timeout=30, check=True)
     if not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
         raise RuntimeError(f"Emulator returned an invalid PNG for {name}")
     (OUTPUT / name).write_bytes(result.stdout)
@@ -113,8 +114,19 @@ def capture(name: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apk", type=Path, required=True)
+    parser.add_argument("--serial")
+    args = parser.parse_args()
+    if args.serial:
+        ADB.extend(["-s", args.serial])
+    if not command("get-serialno").startswith("emulator-"):
+        parser.error("Use a fresh Android emulator for synthetic screenshots.")
+    if command("shell", "pm", "list", "packages", PACKAGE):
+        parser.error("Use an emulator without an existing DEG Messages installation.")
+
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    command("install", "-r", str(APK), timeout=180)
+    command("install", str(args.apk.resolve()), timeout=180)
     command("shell", "cmd", "role", "add-role-holder", "--user", "0", "android.app.role.SMS", PACKAGE)
     command("shell", "pm", "grant", PACKAGE, "android.permission.READ_CONTACTS", check=False)
     command("shell", "pm", "grant", PACKAGE, "android.permission.POST_NOTIFICATIONS", check=False)
@@ -130,27 +142,27 @@ def main() -> None:
     command("shell", "am", "start", "-W", "-n", f"{PACKAGE}/.MainActivity", timeout=45)
     time.sleep(3)
     messages = [
-        ("2025550141", "Hi! Are we still on for coffee after work?"),
-        ("2025550141", "Absolutely. 6:30 at the little cafe on Oak?"),
         ("2025550142", "Your verification code is 482913. It expires in 10 minutes."),
-        ("2025550143", "The design review moved to 3 PM. See you there."),
+        ("2025550143", "The design review moved to 3 PM."),
+        ("2025550141", "Here's the cafe menu: https://example.com/menu"),
+        ("2025550141", "Still good for coffee at 6:30?"),
     ]
     for sender, body in messages:
         command("emu", "sms", "send", sender, body, timeout=30)
         time.sleep(2)
 
     wait_for_text("Messages")
-    wait_for_text("Alex")
+    wait_for_text("Still good for coffee")
     capture("01-inbox.png")
 
-    tap_text("Alex")
-    time.sleep(3)
+    tap_text("Still good for coffee")
+    wait_for_text("https://example.com/menu")
     capture("02-conversation.png")
 
     command("shell", "input", "keyevent", "4")
     time.sleep(2)
     tap_text("OTPs")
-    wait_for_text("OTP detected")
+    wait_for_text("482913")
     capture("03-otps.png")
 
     tap_text("Settings")

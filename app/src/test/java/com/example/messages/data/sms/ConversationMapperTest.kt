@@ -22,9 +22,30 @@ class ConversationMapperTest {
         assertEquals("reply", conversations.single().preview)
         assertEquals(1, conversations.single().unreadCount)
         assertEquals(3, conversations.single().messageCount)
-        assertTrue(conversations.single().searchContent.contains("older"))
         assertFalse(conversations.single().pinned)
         assertEquals("content://contacts/photo", conversations.single().contactPhotoUri)
+    }
+
+    @Test
+    fun simPreviewsUseOnlyReceivedMessagesForThatSubscription() {
+        val conversation = ConversationMapper.map(
+            messages = listOf(
+                sms(1, 10, "sender", "SIM 1 unread", 1, read = false, sim = 31),
+                sms(2, 10, "sender", "SIM 2 received", 2, sim = 78),
+                sms(3, 10, "sender", "SIM 1 latest", 3, sim = 31),
+                sms(4, 10, "sender", "Unknown SIM", 4),
+                sms(5, 10, "sender", "SIM 2 outgoing", 5, type = 2, sim = 78),
+            ),
+            metadata = emptyMap(),
+        ).single()
+
+        assertEquals("SIM 2 outgoing", conversation.preview)
+        assertEquals(setOf(31, 78), conversation.receivedBySubscription.keys)
+        assertEquals(SimInboxPreview("SIM 1 latest", 3, 1, 2), conversation.receivedBySubscription[31])
+        assertEquals(SimInboxPreview("SIM 2 received", 2, 0, 1), conversation.receivedBySubscription[78])
+        assertEquals("SIM 2 received", conversation.receivedOn(78)?.preview)
+        assertEquals(1, conversation.receivedOn(78)?.messageCount)
+        assertEquals(null, conversation.receivedOn(-1))
     }
 
     @Test
@@ -53,5 +74,6 @@ class ConversationMapperTest {
         date: Long,
         read: Boolean = true,
         type: Int = 1,
-    ) = SmsRecord(id, threadId, address, body, date, read, type, -1, -1)
+        sim: Int = -1,
+    ) = SmsRecord(id, threadId, address, body, date, read, type, -1, sim)
 }

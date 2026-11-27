@@ -3,9 +3,12 @@ package com.example.messages.platform
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
+import android.view.View
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
@@ -16,23 +19,35 @@ import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import android.Manifest
 import android.content.pm.PackageManager
-import com.example.messages.MainActivity
 import com.example.messages.MessagesApplication
 import com.example.messages.R
 import com.example.messages.core.design.MESSAGE_HIGHLIGHT_BACKGROUND
 import com.example.messages.core.design.RUPEE_HIGHLIGHT_COLOR
 import com.example.messages.core.design.highlightColor
 import com.example.messages.data.sms.messageHighlights
+import com.example.messages.data.sms.ContactDetails
+import com.example.messages.data.sms.smsSenderBrand
+import java.io.IOException
 
 object SmsNotifications {
-    fun showIncoming(context: Context, threadId: Long, address: String, body: String, otpCode: String? = null, messageId: Long = -1L) {
+    suspend fun showIncoming(
+        context: Context,
+        threadId: Long,
+        address: String,
+        body: String,
+        otpCode: String? = null,
+        messageId: Long = -1L,
+        lookupSender: suspend () -> ContactDetails,
+    ) {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        val openIntent = Intent(context, MainActivity::class.java)
-            .putExtra(MainActivity.EXTRA_THREAD_ID, threadId)
-            .putExtra(MainActivity.EXTRA_ADDRESS, address)
-            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val openIntent = Intent(context, NotificationEntryActivity::class.java)
+            .setData(Uri.parse("messages://conversation/$threadId"))
+            .putExtra(NotificationEntryActivity.EXTRA_THREAD_ID, threadId)
+            .putExtra(NotificationEntryActivity.EXTRA_ADDRESS, address)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val content = PendingIntent.getActivity(
             context, threadId.toInt(), openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag(),
@@ -46,16 +61,27 @@ object SmsNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag(),
         )
         val pinEnabled = isAppPinEnabled(context)
-        val hidePreview = pinEnabled ||
-            context.getSharedPreferences("notification_privacy", Context.MODE_PRIVATE).getBoolean("hide_preview", false)
+        val hidePreview = pinEnabled || notificationPreviewHidden(context)
         val displayBody = if (hidePreview) "New message" else highlightedPreview(body.take(5_120))
-        val title = if (pinEnabled) "DEG Messages" else address
+        val sender = if (pinEnabled) null else lookupSender()
+        val title = if (pinEnabled) "DEG Messages" else sender?.displayName.orEmpty().ifBlank { address }
+        val photo = if (pinEnabled) null else {
+            sender?.photoUri?.takeIf { it.isNotBlank() }?.let { loadContactPhoto(context, it) }
+                ?: smsSenderBrand(address)?.let { ContextCompat.getDrawable(context, it.logo)?.toBitmap(128, 128) }
+        }
         val notification = NotificationCompat.Builder(context, MessagesApplication.MESSAGE_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.sym_action_chat)
             .setContentTitle(title)
             .setContentText(displayBody)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, MessagesApplication.MESSAGE_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.sym_action_chat)
+                    .setContentTitle("DEG Messages")
+                    .setContentText("New message")
+                    .build()
+            )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(content)
@@ -64,13 +90,14 @@ object SmsNotifications {
                 if (displayBody is Spanned) {
                     // The standard Android template can recolor or strip styled text.
                     setStyle(NotificationCompat.DecoratedCustomViewStyle())
-                    setCustomContentView(previewView(context, title, displayBody, maxLines = 1))
-                    setCustomBigContentView(previewView(context, title, displayBody, maxLines = 7))
-                    setCustomHeadsUpContentView(previewView(context, title, displayBody, maxLines = 1))
+                    setCustomContentView(previewView(context, title, displayBody, photo, maxLines = 1))
+                    setCustomBigContentView(previewView(context, title, displayBody, photo, maxLines = 7))
+                    setCustomHeadsUpContentView(previewView(context, title, displayBody, photo, maxLines = 1))
                 } else {
+                    if (photo != null) setLargeIcon(photo)
                     setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
                 }
-                if (pinEnabled) return@apply
+                if (hidePreview) return@apply
                 if (otpCode != null && messageId >= 0L) {
                     val copyIntent = Intent(context, CopyOtpReceiver::class.java)
                         .setAction(CopyOtpReceiver.ACTION_COPY_OTP)
@@ -111,8 +138,29 @@ object SmsNotifications {
 
     fun cancel(context: Context, threadId: Long) = NotificationManagerCompat.from(context).cancel(threadId.toInt())
 
-    private fun previewView(context: Context, sender: String, body: Spanned, maxLines: Int): RemoteViews =
+    private fun loadContactPhoto(context: Context, uri: String): Bitmap? = try {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, Uri.parse(uri))) { decoder, info, _ ->
+            val longestSide = maxOf(info.size.width, info.size.height)
+            if (longestSide > 128) {
+                decoder.setTargetSize(
+                    (info.size.width * 128 / longestSide).coerceAtLeast(1),
+                    (info.size.height * 128 / longestSide).coerceAtLeast(1),
+                )
+            }
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+    } catch (_: IOException) {
+        null
+    } catch (_: SecurityException) {
+        null
+    }
+
+    private fun previewView(context: Context, sender: String, body: Spanned, photo: Bitmap?, maxLines: Int): RemoteViews =
         RemoteViews(context.packageName, R.layout.notification_highlighted_message).apply {
+            if (photo != null) {
+                setImageViewBitmap(R.id.notification_sender_photo, photo)
+                setViewVisibility(R.id.notification_sender_photo, View.VISIBLE)
+            }
             setTextViewText(R.id.notification_sender, sender)
             setTextViewText(R.id.notification_message, body)
             setInt(R.id.notification_message, "setMaxLines", maxLines)
@@ -148,3 +196,6 @@ object SmsNotifications {
         return candidates.singleOrNull()
     }
 }
+
+internal fun notificationPreviewHidden(context: Context): Boolean =
+    context.getSharedPreferences("notification_privacy", Context.MODE_PRIVATE).getBoolean("hide_preview", false)

@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.example.messages.core.design.MessagesDesign
 import com.example.messages.feature.navigation.MessagesRoot
+import com.example.messages.platform.NotificationRoutes
 import dagger.hilt.android.AndroidEntryPoint
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
@@ -18,7 +19,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        notificationTarget = targetFrom(intent)
+        NotificationRoutes.consume(intent)?.let { notificationTarget = it }
         setContent {
             val target = notificationTarget
             MessagesDesign {
@@ -32,14 +33,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        notificationTarget = targetFrom(intent)
-    }
-
-    private fun targetFrom(intent: android.content.Intent): Pair<Long, String> =
-        intent.getLongExtra(EXTRA_THREAD_ID, -1L) to intent.getStringExtra(EXTRA_ADDRESS).orEmpty()
-
-    companion object {
-        const val EXTRA_THREAD_ID = "threadId"
-        const val EXTRA_ADDRESS = "address"
+        NotificationRoutes.consume(intent)?.let { notificationTarget = it }
     }
 }

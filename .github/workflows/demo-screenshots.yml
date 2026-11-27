@@ -11,23 +11,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Download published universal APK
         run: |
           mkdir -p release
           curl --fail --location --retry 3 \
-            https://github.com/orisakume/deg-messages/releases/download/v1.0.0/DEG-Messages-v1.0.0-universal.apk \
-            --output release/DEG-Messages-v1.0.0-universal.apk
+            https://github.com/orisakume/deg-messages/releases/download/v2.3.3/DEG-Messages-v2.3.3-universal.apk \
+            --output release/DEG-Messages-v2.3.3-universal.apk
       - name: Capture synthetic demo screens
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 36
           arch: x86_64
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -no-boot-anim -no-audio -gpu swiftshader_indirect
-          script: python3 .github/scripts/capture_demo_screenshots.py
-      - uses: actions/upload-artifact@v4
+          script: python3 .github/scripts/capture_demo_screenshots.py --apk release/DEG-Messages-v2.3.3-universal.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deg-messages-synthetic-screenshots
           path: docs/screenshots/*.png

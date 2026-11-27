@@ -21,17 +21,26 @@ val releaseSigningProperties = Properties().apply {
 android {
     namespace = "com.example.messages"
     compileSdk = 37
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = if (playBundle) "io.github.orisakume.degmessages" else "com.example.messages"
         minSdk = 29
         targetSdk = 37
-        versionCode = 6
-        versionName = "2.3.0"
+        // Follow the version numbering rule in docs/RELEASE_SIGNING.md when bumping these values.
+        versionCode = 9
+        versionName = "2.3.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures { compose = true }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 
     splits {
         abi {
@@ -45,6 +54,7 @@ android {
     buildTypes.named("release") {
         isMinifyEnabled = true
         isShrinkResources = true
+        ndk.debugSymbolLevel = "SYMBOL_TABLE"
         proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
     }
 
@@ -69,12 +79,20 @@ android {
 
     kotlinOptions { jvmTarget = "17" }
 
-    packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // Project-built copies come first and let the release build extract matching symbols.
+        jniLibs.pickFirsts += setOf("**/libandroidx.graphics.path.so", "**/libdatastore_shared_counter.so")
+    }
 }
 
 kapt { correctErrorTypes = true }
 
 dependencies {
+    constraints {
+        implementation("androidx.graphics:graphics-path:1.0.1") { version { strictly("1.0.1") } }
+        implementation("androidx.datastore:datastore-core-android:1.1.7") { version { strictly("1.1.7") } }
+    }
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

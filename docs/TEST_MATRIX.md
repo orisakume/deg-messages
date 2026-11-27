@@ -1,4 +1,12 @@
-# DEG Messages v2.3.0 verification
+# DEG Messages verification
+
+## v2.3.3
+
+- Gradle unit tests and release lint passed. All five APK variants were verified against the existing GitHub release signing certificate.
+- An isolated Android 17 emulator running the universal release APK received synthetic messages and displayed the inbox, conversation, and OTPs. The Google Play build displayed Settings on a Samsung Galaxy A55 running Android 17.
+- The release supports Android 10 and newer. These checks do not establish live carrier MMS behavior or cover every Android version.
+
+## v2.3.0
 
 The release supports installation beginning with Android 10 (API 29). Runtime checks were performed on a OnePlus 11 running Android 16 and, for the SMS regression below, an Android 17 emulator.
 

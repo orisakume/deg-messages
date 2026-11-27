@@ -46,7 +46,7 @@ internal fun BackupSettings() {
     fun chooseDestination() { create.launch("DEG-Messages-${java.time.LocalDate.now()}.json") }
 
     SettingsGroup("Message history") {
-        SettingsLink("Create backup", "Export SMS and outgoing photos to a readable file", Icons.Default.FileUpload,
+        SettingsLink("Create backup", "Export SMS and outgoing photos to an unencrypted file", Icons.Default.FileUpload,
             SettingsDestination.Backup.accent, enabled = !busy) {
             if (store.enabled) authorize = true else chooseDestination()
         }

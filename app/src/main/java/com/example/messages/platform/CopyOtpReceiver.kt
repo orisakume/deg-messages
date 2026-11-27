@@ -1,7 +1,6 @@
 package com.example.messages.platform
 
 import android.content.BroadcastReceiver
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -20,7 +19,7 @@ import kotlinx.coroutines.launch
 class CopyOtpReceiver : BroadcastReceiver() {
     @Inject lateinit var dao: OtpRecordDao
     override fun onReceive(context: Context, intent: Intent) {
-        if (isAppPinEnabled(context)) return
+        if (intent.action != ACTION_COPY_OTP || isAppPinEnabled(context) || notificationPreviewHidden(context)) return
         val id = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
         if (id < 0L) return
         val pending = goAsync()
@@ -29,7 +28,7 @@ class CopyOtpReceiver : BroadcastReceiver() {
                 val record = dao.get(id) ?: return@launch
                 if (record.dismissed || record.isExpiredAt(System.currentTimeMillis()) || shouldRemoveOtpAfterCopy(record.copyCount)) return@launch
                 context.getSystemService(ClipboardManager::class.java)
-                    ?.setPrimaryClip(ClipData.newPlainText("Verification code", record.code))
+                    ?.setPrimaryClip(sensitiveOtpClip(record.code))
                     ?: return@launch
                 dao.incrementCopyCount(id)
                 android.os.Handler(context.mainLooper).post { Toast.makeText(context, "OTP copied", Toast.LENGTH_SHORT).show() }

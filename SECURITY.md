@@ -12,3 +12,9 @@ DEG Messages is an SMS client, not an end-to-end encrypted messaging service.
 SMS delivery and storage are controlled by Android and the mobile carrier.
 Recycle Bin copies are stored in app-private local storage and are not
 separately encrypted by the app.
+
+Manual backup files contain unencrypted message history and outgoing photos.
+Anyone with access to the exported file can read its contents.
+
+Android and Google Play system updates provide security fixes for platform
+components that process SMS, MMS, and attachments.

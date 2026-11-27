@@ -17,17 +17,25 @@ class RespondViaMessageService : Service() {
     @Inject lateinit var repository: SmsRepository
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val address = intent?.data?.schemeSpecificPart.orEmpty()
-        val body = intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
+        val destination = intent?.data
+        if (intent?.action != "android.intent.action.RESPOND_VIA_MESSAGE" ||
+            destination?.scheme !in setOf("sms", "smsto", "mms", "mmsto") ||
+            !DefaultSmsRole.isHeld(this)
+        ) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        val address = destination?.schemeSpecificPart.orEmpty()
+        val body = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
+        if (!canReplyToSmsAddress(address) || body.isBlank()) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                if (canReplyToSmsAddress(address) && body.isNotBlank()) {
-                    try {
-                        repository.sendSms(address, body)
-                    } catch (_: Exception) {
-                        // The caller has no interactive surface for reporting an asynchronous send failure.
-                    }
-                }
+                repository.sendSms(address, body)
+            } catch (_: Exception) {
+                // The caller has no interactive surface for reporting an asynchronous send failure.
             } finally {
                 stopSelf(startId)
             }

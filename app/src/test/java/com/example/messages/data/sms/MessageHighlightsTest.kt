@@ -6,6 +6,17 @@ import org.junit.Test
 
 class MessageHighlightsTest {
     @Test
+    fun highlightsOnlyTheSixDigitsOfAnIndaneDeliveryCode() {
+        val body = "Indane refill delivery. Share DAC 000000 with the delivery person."
+        val code = messageHighlights(body).actions.single()
+
+        assertEquals(HighlightKind.Otp, code.kind)
+        assertEquals("000000", code.value)
+        assertEquals("000000", body.substring(code.range))
+        assertTrue(messageHighlights("DAC 12345 or DAC 1234567").actions.none { it.kind == HighlightKind.Otp })
+    }
+
+    @Test
     fun extractsOnlyTheOriginalLinkPhoneAndOtp() {
         val body = "Order status (https://example.com/order?id=2025550118). Call +1 202-555-0118. Your OTP is 482913."
         val highlights = messageHighlights(body).actions

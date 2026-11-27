@@ -7,6 +7,7 @@ project. The declared runtime libraries are distributed under Apache License
 2.0; JUnit is distributed under the Eclipse Public License 1.0. Consult each
 dependency's published artifact and source repository for its complete notice.
 
-No third-party image, icon pack, advertising SDK, analytics SDK, or external
-message-processing service is declared in the app module. Android platform
-icons are referenced by framework resource identifiers.
+The repository includes Apache-licensed AndroidX Graphics Path and DataStore
+native sources. See [the upstream versions](docs/RELEASE_SIGNING.md#native-crash-symbols).
+See [Brand artwork sources](docs/BRAND_LOGOS.md#image-sources) for the bundled logos
+and their respective licenses.

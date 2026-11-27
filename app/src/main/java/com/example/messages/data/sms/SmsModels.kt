@@ -30,10 +30,16 @@ data class SmsConversation(
     val muted: Boolean,
     val spam: Boolean,
     val textScale: Float,
-    val searchContent: String,
     val contactPhotoUri: String = "",
     val category: MessageCategory = MessageCategory.Personal,
-)
+    val receivedBySubscription: Map<Int, SimInboxPreview> = emptyMap(),
+) {
+    internal fun receivedOn(subscriptionId: Int): SmsConversation? = receivedBySubscription[subscriptionId]?.let {
+        copy(preview = it.text, date = it.date, unreadCount = it.unreadCount, messageCount = it.messageCount)
+    }
+}
+
+data class SimInboxPreview(val text: String, val date: Long, val unreadCount: Int, val messageCount: Int)
 
 data class ContactDetails(val displayName: String = "", val photoUri: String = "")
 
@@ -46,37 +52,77 @@ data class SimOption(val subscriptionId: Int, val displayName: String, val slotI
 data class ConversationFlags(val pinned: Boolean, val archived: Boolean, val muted: Boolean, val spam: Boolean, val textScale: Float)
 
 object ConversationMapper {
+    internal val inboxOrder = compareByDescending<SmsConversation> { it.pinned }.thenByDescending { it.date }
+
     fun map(
         messages: List<SmsRecord>,
         metadata: Map<Long, ConversationFlags>,
         contactDetails: (String) -> ContactDetails = { ContactDetails() },
-    ): List<SmsConversation> = messages
-        .groupBy(SmsRecord::threadId)
-        .mapNotNull { (threadId, records) ->
-            if (threadId < 0 || records.isEmpty()) return@mapNotNull null
-            val latest = records.maxByOrNull(SmsRecord::date) ?: return@mapNotNull null
-            val address = latest.address.ifBlank { records.firstOrNull { it.address.isNotBlank() }?.address.orEmpty() }
+    ): List<SmsConversation> {
+        val threads = mutableMapOf<Long, Summary>()
+        messages.forEach { message ->
+            if (message.threadId >= 0) threads.getOrPut(message.threadId) { Summary(message) }.add(message)
+        }
+        return threads.map { (threadId, summary) ->
+            val latest = summary.latest
+            val address = latest.address.ifBlank { summary.firstAddress }
             val flags = metadata[threadId] ?: ConversationFlags(false, false, false, false, 1f)
             val contact = contactDetails(address)
             SmsConversation(
                 threadId = threadId,
                 address = address,
                 displayName = contact.displayName.ifBlank { address.ifBlank { "Unknown sender" } },
-                preview = latest.body.ifBlank { if (latest.attachmentMime?.startsWith("video/") == true) "Video" else if (latest.attachmentUri != null) "Photo" else "" },
+                preview = latest.preview(),
                 date = latest.date,
-                unreadCount = records.count { it.type == INBOX_TYPE && !it.read },
-                messageCount = records.size,
+                unreadCount = summary.unread,
+                messageCount = summary.count,
                 pinned = flags.pinned,
                 archived = flags.archived,
                 muted = flags.muted,
                 spam = flags.spam,
                 textScale = flags.textScale,
-                searchContent = records.joinToString(" ") { "${it.address} ${it.body}" },
                 contactPhotoUri = contact.photoUri,
-                category = classifyMessage(records.asSequence().filter { it.type == INBOX_TYPE }.maxByOrNull(SmsRecord::date)?.body.orEmpty()),
+                category = classifyMessage(summary.latestIncoming?.body.orEmpty()),
+                receivedBySubscription = summary.receivedBySubscription.mapValues { (_, sim) ->
+                    SimInboxPreview(sim.latest.preview(), sim.latest.date, sim.unread, sim.count)
+                },
             )
+        }.sortedWith(inboxOrder)
+    }
+
+    private class Summary(message: SmsRecord) {
+        var latest = message
+        var firstAddress = message.address
+        var latestIncoming: SmsRecord? = null
+        var count = 0
+        var unread = 0
+        val receivedBySubscription = mutableMapOf<Int, Received>()
+
+        fun add(message: SmsRecord) {
+            count++
+            if (message.date > latest.date) latest = message
+            if (firstAddress.isBlank()) firstAddress = message.address
+            if (message.type != INBOX_TYPE) return
+            if (!message.read) unread++
+            if (latestIncoming?.let { message.date > it.date } != false) latestIncoming = message
+            if (message.subscriptionId >= 0) {
+                val received = receivedBySubscription.getOrPut(message.subscriptionId) { Received(message) }
+                received.count++
+                if (!message.read) received.unread++
+                if (message.date > received.latest.date) received.latest = message
+            }
         }
-        .sortedWith(compareByDescending<SmsConversation> { it.pinned }.thenByDescending { it.date })
+    }
+
+    private class Received(var latest: SmsRecord, var count: Int = 0, var unread: Int = 0)
+
+    private fun SmsRecord.preview() = body.ifBlank {
+        when {
+            attachmentMime?.startsWith("video/") == true -> "Video"
+            attachmentUri != null -> "Photo"
+            else -> ""
+        }
+    }
 
     const val INBOX_TYPE = 1
 }

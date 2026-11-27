@@ -118,15 +118,7 @@ class MmsStore(private val context: Context) {
     }
 
     private fun prepareImage(uri: Uri, mode: ImageResolution, limit: Int, maxWidth: Int, maxHeight: Int): MmsAttachment {
-        val source = ImageDecoder.createSource(resolver, uri)
         if (mode == ImageResolution.Original) {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            val mime = bounds.outMimeType
-            if (mime !in setOf("image/jpeg", "image/png", "image/gif", "image/webp") ||
-                (maxWidth > 0 && bounds.outWidth > maxWidth) || (maxHeight > 0 && bounds.outHeight > maxHeight)) {
-                return prepareImage(uri, ImageResolution.Auto, limit, maxWidth, maxHeight)
-            }
             val data = resolver.openInputStream(uri)?.use { input ->
                 val output = ByteArrayOutputStream()
                 val buffer = ByteArray(8192)
@@ -138,13 +130,24 @@ class MmsStore(private val context: Context) {
                 }
                 output.toByteArray()
             } ?: error("Could not read this image.")
-            return MmsAttachment(mime!!, data)
+            // Check the exact bytes we will send. A provider can return different bytes on each open.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+            require(hasSafeMediaDimensions(bounds.outWidth, bounds.outHeight)) { "This image is invalid or too large." }
+            val mime = bounds.outMimeType
+            if (mime !in setOf("image/jpeg", "image/png", "image/gif", "image/webp") ||
+                (maxWidth > 0 && bounds.outWidth > maxWidth) || (maxHeight > 0 && bounds.outHeight > maxHeight)) {
+                return prepareImage(uri, ImageResolution.Auto, limit, maxWidth, maxHeight)
+            }
+            return MmsAttachment(requireNotNull(mime), data)
         }
+        val source = ImageDecoder.createSource(resolver, uri)
         var edge = mode.maxEdge
         repeat(9) {
             val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 val width = info.size.width
                 val height = info.size.height
+                require(hasSafeMediaDimensions(width, height)) { "This image is invalid or too large." }
                 val scale = minOf(1.0, edge.toDouble() / maxOf(width, height),
                     if (maxWidth > 0) maxWidth.toDouble() / width else 1.0,
                     if (maxHeight > 0) maxHeight.toDouble() / height else 1.0)

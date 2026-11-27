@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class RecycleBinViewModel @Inject constructor(private val repository: RecycleBinRepository) : ViewModel() {
-    val items: StateFlow<List<DeletedItemEntity>> = repository.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val items: StateFlow<List<DeletedItemEntity>?> = repository.observe().stateIn(viewModelScope, SharingStarted.Eagerly, null)
     fun restore(ids: List<Long>) = viewModelScope.launch { repository.restore(ids) }
     fun delete(ids: List<Long>) = viewModelScope.launch { repository.permanentlyDelete(ids) }
     fun empty() = viewModelScope.launch { repository.empty() }

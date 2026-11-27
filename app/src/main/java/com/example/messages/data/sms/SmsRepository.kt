@@ -35,10 +35,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.ensureActive
@@ -47,7 +50,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import com.example.messages.platform.SmsSentReceiver
@@ -69,13 +75,22 @@ class SmsRepository @Inject constructor(
     private val messageRevision = MutableStateFlow(0L)
     private val contactsCache = android.util.LruCache<String, ContactDetails>(512)
     private val mmsStore = com.example.messages.data.mms.MmsStore(context)
+    private val conversationSims = context.getSharedPreferences("conversation_sims", Context.MODE_PRIVATE)
+    private val messageRecords = messageChanges().map {
+        try { readAllMessages() } catch (_: SecurityException) { emptyList() }
+    }.shareIn(
+        CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000, replayExpirationMillis = 0),
+        replay = 1,
+    )
 
-    suspend fun sendAttachment(address: String, text: String, image: Uri, sim: Int): Long =
-        mmsStore.send(address, text, image, sim, com.example.messages.data.mms.ImageResolution.preferred(context))
+    suspend fun sendAttachment(address: String, text: String, image: Uri, sim: Int): Long {
+        requireActiveSim(sim)
+        return mmsStore.send(address, text, image, sim, com.example.messages.data.mms.ImageResolution.preferred(context))
+    }
 
     fun observeConversations(): Flow<List<SmsConversation>> =
-        messageChanges()
-            .mapLatest { readAllMessages() }
+        messageRecords
             .combine(conversationMetadataDao.observeAll()) { records, metadata -> records to metadata }
             .combine(contactChanges()) { (records, metadata), _ -> records to metadata }
             .flatMapLatest { (records, metadata) ->
@@ -103,11 +118,15 @@ class SmsRepository @Inject constructor(
             }
             .distinctUntilChanged()
 
-    fun observeSearch(query: MessageSearch): Flow<Set<Long>?> = if (!query.hasMessageFilters) flow { emit(null) } else
-        messageChanges().mapLatest {
+    fun observeSearch(query: MessageSearch, incomingSubscriptionId: Int? = null): Flow<Set<Long>?> = if (!query.hasMessageFilters) flow { emit(null) } else
+        messageRecords.mapLatest { records ->
             withContext(Dispatchers.IO) {
                 val names = mutableMapOf<String, String>()
-                readAllMessages().asSequence().filter { message ->
+                records.asSequence().filter { message ->
+                    ensureActive()
+                    if (incomingSubscriptionId != null &&
+                        (message.type != Telephony.Sms.MESSAGE_TYPE_INBOX || message.subscriptionId != incomingSubscriptionId)
+                    ) return@filter false
                     val name = if (query.field != SearchField.Message && query.text.isNotBlank()) {
                         names.getOrPut(message.address) {
                             cachedContactDetails(message.address).displayName.ifBlank { smsSenderBrand(message.address)?.name.orEmpty() }
@@ -120,11 +139,11 @@ class SmsRepository @Inject constructor(
 
     fun observeThread(threadId: Long, limit: Int = Int.MAX_VALUE): Flow<List<SmsRecord>> =
         messageChanges()
-            .mapLatest { withContext(Dispatchers.IO) { readThread(threadId, limit) } }
+            .map { readThread(threadId, limit) }
             .distinctUntilChanged()
 
     fun observeMessageMetadata(): Flow<List<MessageMetadataEntity>> = messageMetadataDao.observeAll()
-    fun observeConversationMetadata() = conversationMetadataDao.observeAll()
+    fun observeConversationMetadata(threadId: Long) = conversationMetadataDao.observe(threadId).distinctUntilChanged()
 
     suspend fun loadThread(threadId: Long, limit: Int = Int.MAX_VALUE): List<SmsRecord> =
         withContext(Dispatchers.IO) { readThread(threadId, limit) }
@@ -184,19 +203,53 @@ class SmsRepository @Inject constructor(
         lookupContactDetailsOnIo(address)
     }
 
+    internal fun hasSimPermission(): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
+
     suspend fun activeSubscriptions(): List<SimOption> = withContext(Dispatchers.IO) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        if (!hasSimPermission()) {
             return@withContext emptyList()
         }
         try {
             val manager = context.getSystemService(SubscriptionManager::class.java)
-            manager?.activeSubscriptionInfoList.orEmpty().sortedBy { it.simSlotIndex }.map {
+            manager?.activeSubscriptionInfoList.orEmpty().filter { it.simSlotIndex >= 0 }
+                .sortedWith(compareBy({ it.simSlotIndex }, { it.subscriptionId })).map {
                 val carrier = it.carrierName?.toString().orEmpty().trim()
                 val label = carrier.ifBlank { it.displayName?.toString().orEmpty().trim() }
                 SimOption(it.subscriptionId, label.ifBlank { "SIM ${it.simSlotIndex + 1}" }, it.simSlotIndex)
             }
         } catch (_: SecurityException) {
             emptyList()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    internal fun observeSubscriptions(): Flow<List<SimOption>> = callbackFlow {
+        val manager = context.getSystemService(SubscriptionManager::class.java)
+        val listener = object : SubscriptionManager.OnSubscriptionsChangedListener() {
+            override fun onSubscriptionsChanged() { trySend(Unit) }
+        }
+        val registered = if (manager != null && hasSimPermission()) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) manager.addOnSubscriptionsChangedListener(context.mainExecutor, listener)
+                else manager.addOnSubscriptionsChangedListener(listener)
+                true
+            } catch (_: SecurityException) { false }
+        } else false
+        trySend(Unit)
+        awaitClose { if (registered) manager?.removeOnSubscriptionsChangedListener(listener) }
+    }.flowOn(Dispatchers.Main.immediate).conflate().mapLatest { activeSubscriptions() }
+
+    internal fun savedConversationSim(threadId: Long): Int? = conversationSims.getInt(threadId.toString(), -1).takeIf { it >= 0 }
+
+    internal fun saveConversationSim(threadId: Long, subscriptionId: Int) {
+        conversationSims.edit().putInt(threadId.toString(), subscriptionId).apply()
+    }
+
+    private suspend fun requireActiveSim(subscriptionId: Int) {
+        if (subscriptionId < 0) return
+        check(activeSubscriptions().any { it.subscriptionId == subscriptionId }) {
+            "The selected SIM is unavailable. Choose an active SIM and try again."
         }
     }
 
@@ -246,7 +299,12 @@ class SmsRepository @Inject constructor(
             put(Telephony.Sms.READ, if (read) 1 else 0)
             put(Telephony.Sms.SEEN, 1)
         }
-        resolver.update(Telephony.Sms.CONTENT_URI, values, "${Telephony.Sms.THREAD_ID}=?", arrayOf(threadId.toString()))
+        resolver.update(
+            Telephony.Sms.CONTENT_URI,
+            values,
+            "${Telephony.Sms.THREAD_ID}=? AND (${Telephony.Sms.READ} IS NOT ? OR ${Telephony.Sms.SEEN} IS NOT 1)",
+            arrayOf(threadId.toString(), if (read) "1" else "0"),
+        )
     }
 
     suspend fun markThreadsRead(threadIds: List<Long>, read: Boolean) = withContext(Dispatchers.IO) {
@@ -342,6 +400,7 @@ class SmsRepository @Inject constructor(
         check(supportsSms) {
             "SMS sending is not available on this device."
         }
+        requireActiveSim(subscriptionId)
 
         val threadId = Telephony.Threads.getOrCreateThreadId(context, setOf(destination))
         val baseManager = context.getSystemService(SmsManager::class.java)

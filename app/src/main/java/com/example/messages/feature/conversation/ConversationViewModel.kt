@@ -1,6 +1,7 @@
 package com.example.messages.feature.conversation
 
 import android.net.Uri
+import android.telephony.SubscriptionManager
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,13 +18,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class HistoryPage(val messages: List<SmsRecord> = emptyList(), val hasOlder: Boolean = false)
+data class HistoryPage(val messages: List<SmsRecord>, val hasOlder: Boolean)
 
 @HiltViewModel
+@OptIn(ExperimentalCoroutinesApi::class)
 class ConversationViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: SmsRepository,
@@ -33,8 +39,11 @@ class ConversationViewModel @Inject constructor(
     val recycleBinEnabled: Boolean get() = repository.isRecycleBinEnabled()
     private val mutableContactDetails = MutableStateFlow<ContactDetails?>(null)
     val contactDetails: StateFlow<ContactDetails?> = mutableContactDetails
-    val conversationMetadata: StateFlow<ConversationMetadataEntity> = repository.observeConversationMetadata()
-        .map { rows -> rows.firstOrNull { it.threadId == threadId } ?: ConversationMetadataEntity(threadId) }
+    private val subscriptionRefresh = MutableStateFlow(0L)
+    private val mutableSimSelection = MutableStateFlow(ConversationSimSelection(rememberedId = repository.savedConversationSim(threadId)))
+    internal val simSelection = mutableSimSelection.asStateFlow()
+    val conversationMetadata: StateFlow<ConversationMetadataEntity> = repository.observeConversationMetadata(threadId)
+        .map { it ?: ConversationMetadataEntity(threadId) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConversationMetadataEntity(threadId))
     val textScale: StateFlow<Float> = conversationMetadata
         .map { it.textScale }
@@ -44,16 +53,40 @@ class ConversationViewModel @Inject constructor(
     fun loadOlderMessages() { historyLimit.value += 50 }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val history = historyLimit.flatMapLatest { limit ->
+    val history: StateFlow<HistoryPage?> = historyLimit.flatMapLatest { limit ->
         repository.observeThread(threadId, limit + 1).map { HistoryPage(it.takeLast(limit), it.size > limit) }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryPage())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val pinnedMessageIds: StateFlow<Set<Long>> = repository.observeMessageMetadata()
         .map { rows -> rows.filter(MessageMetadataEntity::pinned).map(MessageMetadataEntity::messageId).toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     init {
-        viewModelScope.launch { if (threadId >= 0) repository.markThreadRead(threadId, true) }
+        viewModelScope.launch {
+            if (threadId >= 0) {
+                history.filterNotNull().first()
+                repository.markThreadRead(threadId, true)
+            }
+        }
         viewModelScope.launch { mutableContactDetails.value = repository.contactDetails(address) }
+        viewModelScope.launch {
+            subscriptionRefresh.flatMapLatest { repository.observeSubscriptions() }.collect { active ->
+                val before = mutableSimSelection.value
+                val after = before.withActiveSubscriptions(active, SubscriptionManager.getDefaultSmsSubscriptionId(), repository.hasSimPermission())
+                if (after.rememberedId != before.rememberedId) after.rememberedId?.let { repository.saveConversationSim(threadId, it) }
+                mutableSimSelection.value = after
+            }
+        }
+    }
+
+    internal fun refreshSubscriptions() { subscriptionRefresh.update { it + 1 } }
+
+    internal fun selectedSubscriptionId(): Int? = mutableSimSelection.value.selected?.subscriptionId
+
+    internal fun switchSim() {
+        val selection = mutableSimSelection.value
+        val next = selection.next() ?: return
+        repository.saveConversationSim(threadId, next.subscriptionId)
+        mutableSimSelection.value = selection.copy(rememberedId = next.subscriptionId)
     }
 
     fun setMessagePinned(messageId: Long, pinned: Boolean) = viewModelScope.launch { repository.setMessagePinned(messageId, pinned) }

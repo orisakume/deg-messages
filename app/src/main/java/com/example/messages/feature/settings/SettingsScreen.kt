@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,12 +25,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import com.example.messages.core.design.AppColors
+import com.example.messages.core.design.ActionAppearance
+import com.example.messages.core.design.ActionIconGrid
 import com.example.messages.data.mms.ImageResolution
 import com.example.messages.data.recyclebin.RecycleBinRepository
+import com.example.messages.feature.inbox.ConversationAction
+import com.example.messages.feature.conversation.MessageAction
 import com.example.messages.platform.OtpCleanupWorker
 
 internal enum class SettingsDestination(
@@ -43,6 +50,8 @@ internal enum class SettingsDestination(
     Media("Photos in MMS", "Image resolution and carrier limits", Icons.Default.Image, Color(0xFF91BEFF), "settings/media"),
     Scheduled("Scheduled SMS", "Manage messages queued to send", Icons.Default.Schedule, Color(0xFF8ADCD0), "scheduled", false),
     Notifications("Notifications", "Message previews, sounds and lock screen", Icons.Default.Notifications, Color(0xFFFFC780), "settings/notifications"),
+    ConversationActions("Conversation action order", "Reorder the icons in both chat menus", Icons.AutoMirrored.Filled.Sort, Color(0xFFB7BCF7), "settings/conversation-actions"),
+    MessageActions("Message action order", "Reorder the icons for individual messages", Icons.AutoMirrored.Filled.Sort, Color(0xFF8ADCD0), "settings/message-actions"),
     AppLock("App lock", "PIN, password and fingerprint", Icons.Default.Lock, Color(0xFFCDB2FF), "settings/app-lock"),
     Spam("Spam protection", "Automatic filtering and blocked senders", Icons.Default.Shield, Color(0xFFFFA4AF), "settings/spam"),
     Otp("OTP expiry", "Verification cards and expired messages", Icons.Default.VerifiedUser, Color(0xFF9CDF9E), "settings/otp"),
@@ -64,7 +73,8 @@ internal fun SettingsScreen(
 ) {
     SettingsPage("Settings", bottomBarSpace = bottomBarSpace) {
         SettingsGroup("Messaging") {
-            DestinationLinks(onOpen, SettingsDestination.Media, SettingsDestination.Scheduled, SettingsDestination.Notifications)
+            DestinationLinks(onOpen, SettingsDestination.Media, SettingsDestination.Scheduled, SettingsDestination.Notifications,
+                SettingsDestination.ConversationActions, SettingsDestination.MessageActions)
             SettingsDivider()
             SettingsToggle(
                 "Chat categories", "Show All, Unread, and other filters in Chats",
@@ -89,11 +99,21 @@ internal fun SettingsDetailScreen(
     onOpenSpam: () -> Unit,
     transparentNavigationBar: Boolean,
     onTransparentNavigationBarChange: (Boolean) -> Unit,
+    conversationActionOrder: List<ConversationAction>,
+    onConversationActionOrderChange: (List<ConversationAction>) -> Unit,
+    messageActionOrder: List<MessageAction>,
+    onMessageActionOrderChange: (List<MessageAction>) -> Unit,
 ) {
     SettingsPage(destination.title, onBack) {
         when (destination) {
             SettingsDestination.Media -> MediaSettings()
             SettingsDestination.Notifications -> NotificationSettings()
+            SettingsDestination.ConversationActions -> ActionOrderEditor(
+                conversationActionOrder, ConversationAction.entries, ConversationAction::appearance, onConversationActionOrderChange,
+            )
+            SettingsDestination.MessageActions -> ActionOrderEditor(
+                messageActionOrder, MessageAction.entries, MessageAction::appearance, onMessageActionOrderChange,
+            )
             SettingsDestination.AppLock -> SettingsGroup("Verification") { PinLockSetting() }
             SettingsDestination.Spam -> SpamSettings(onOpenSpam)
             SettingsDestination.Otp -> OtpSettings()
@@ -104,6 +124,46 @@ internal fun SettingsDetailScreen(
                     SettingsDestination.Appearance, transparentNavigationBar, onTransparentNavigationBarChange)
             }
             SettingsDestination.Scheduled, SettingsDestination.About -> Unit
+        }
+    }
+}
+
+@Composable
+private fun <T> ActionOrderEditor(
+    order: List<T>,
+    defaults: List<T>,
+    appearance: (T) -> ActionAppearance,
+    onOrderChange: (List<T>) -> Unit,
+) {
+    var selected by remember { mutableStateOf<T?>(null) }
+    val selectedIndex = order.indexOfFirst { it == selected }
+    fun move(to: Int) {
+        val updated = order.toMutableList()
+        updated.add(to, updated.removeAt(selectedIndex))
+        onOrderChange(updated)
+    }
+
+    SettingsGroup("Menu order") {
+        Column(Modifier.padding(horizontal = 12.dp)) {
+            ActionIconGrid(
+                order.map { appearance(it).action {} },
+                selectedIndex = selectedIndex,
+                showPreviewSurface = true,
+            ) { index ->
+                selected = order[index]
+            }
+        }
+        SettingsDivider()
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.Center) {
+            TextButton(onClick = { move(selectedIndex - 1) }, enabled = selectedIndex > 0) {
+                Text("Move earlier")
+            }
+            TextButton(onClick = { move(selectedIndex + 1) }, enabled = selectedIndex in 0 until order.lastIndex) {
+                Text("Move later")
+            }
+            TextButton(onClick = { onOrderChange(defaults) }, enabled = order != defaults) {
+                Text("Reset order")
+            }
         }
     }
 }
@@ -134,7 +194,7 @@ private fun OtpSettings() {
 @Composable
 private fun SettingsPage(title: String, onBack: (() -> Unit)? = null, bottomBarSpace: Dp = 0.dp, content: @Composable ColumnScope.() -> Unit) {
     val scroll = rememberScrollState()
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    Box(Modifier.fillMaxSize().background(AppColors.Background), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.fillMaxHeight().widthIn(max = 680.dp).fillMaxWidth()) {
             if (onBack != null) {
                 TopAppBar(
@@ -148,11 +208,16 @@ private fun SettingsPage(title: String, onBack: (() -> Unit)? = null, bottomBarS
             }
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)
-                    .padding(start = 18.dp, end = 18.dp, top = if (onBack == null) 18.dp else 8.dp, bottom = 24.dp + bottomBarSpace),
+                    .padding(start = 18.dp, end = 18.dp, top = if (onBack == null) 0.dp else 8.dp, bottom = 24.dp + bottomBarSpace),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                if (onBack == null) Text(title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 3.dp, bottom = 4.dp))
+                if (onBack == null) Text(
+                    title,
+                    color = AppColors.TextPrimary,
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 3.dp, bottom = 4.dp).semantics { heading() },
+                )
                 content()
             }
         }

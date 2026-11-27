@@ -1,6 +1,5 @@
 package com.example.messages.feature.otp
 
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -8,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.messages.core.database.OtpRecordDao
 import com.example.messages.core.database.OtpRecordEntity
 import com.example.messages.data.sms.SmsRepository
+import com.example.messages.platform.sensitiveOtpClip
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -35,7 +35,7 @@ class OtpViewModel @Inject constructor(
 
     fun copy(messageId: Long, code: String) {
         val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-        clipboard.setPrimaryClip(ClipData.newPlainText("Verification code", code))
+        clipboard.setPrimaryClip(sensitiveOtpClip(code))
         viewModelScope.launch { dao.incrementCopyCount(messageId) }
     }
 
